@@ -1962,6 +1962,7 @@ key 上缺省或为 `null` 的共享字段继承分组值，再使用该字段�
 | `cloak` | Claude | 包含 `mode`、`strict-mode`、`sensitive-words`、`cache-user-id` 的对象。 |
 | `experimental-cch-signing` | Claude | 兼容保留；支持的直连上游已自动签名。 |
 | `rebuild-mid-system-message` | Claude | 重建会话正文中间的 system 消息。 |
+| `native-tool-search` | Claude | 信任自定义 base URL 支持 Anthropic 原生 tool search（`defer_loading` + `tool_reference`），用于 Codex `tool_search`；官方 `api.anthropic.com` 凭证自动启用。需要开启 `upstream.claude.tool-search`。 |
 | `fingerprint-profile` | Claude | 可选指纹配置，如 `claude-code-cli`；空值由调用方控制。 |
 | `request-scoped-errors` | Gemini/Interactions、Claude、Codex、xAI、Meta | 覆盖继承的请求级错误规则。 |
 
@@ -4105,6 +4106,7 @@ Query 参数：
 | `oauth.providers.codex.live-media-relay.udp-port-min` / `udp-port-max` | integer | 中继 UDP 端口范围。 |
 | `oauth.providers.codex.live-media-relay.ice-servers` | object array | 每项包含 `urls` 和可选 `username` / `credential`；JSON 读取隐藏后两者。 |
 | `upstream.claude.model-level-cooling` | boolean | 将 Claude 额度冷却限定到模型。 |
+| `upstream.claude.tool-search` | boolean | 在 Claude Responses 路由上启用 Codex 客户端 `tool_search`（支持时使用 Anthropic 原生 tool search）；默认 `false` 保持引入 tool_search 之前的行为。 |
 | `upstream.claude.disable-claude-cloak-mode` | boolean | 禁用 Claude OAuth 和显式启用 CLI 指纹的 API Key 请求的 cloaking。 |
 | `upstream.claude.disable-cloaking-model-list` | boolean | 禁用 Anthropic 模型列表响应中的模型 ID cloaking。 |
 | `upstream.claude.header-defaults.timezone` | string | Claude 请求头指纹的 timezone 默认值。 |
