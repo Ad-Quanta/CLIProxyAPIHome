@@ -1963,6 +1963,7 @@ Each key can specify integer `weight`; omission defaults to `1`, the maximum is 
 | `cloak` | Claude | Object with `mode`, `strict-mode`, `sensitive-words`, and `cache-user-id`. |
 | `experimental-cch-signing` | Claude | Retained for compatibility; signing is automatic on supported direct upstreams. |
 | `rebuild-mid-system-message` | Claude | Rebuilds system messages found in the conversation body. |
+| `native-tool-search` | Claude | Trusts a custom base URL with Anthropic native tool search (`defer_loading` + `tool_reference`) for Codex `tool_search`; official `api.anthropic.com` keys use it automatically. |
 | `fingerprint-profile` | Claude | Optional fingerprint profile such as `claude-code-cli`; empty leaves the caller's profile in control. |
 | `request-scoped-errors` | Gemini/Interactions, Claude, Codex, xAI, Meta | Overrides inherited request-scoped error rules. |
 

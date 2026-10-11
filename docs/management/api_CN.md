@@ -1962,6 +1962,7 @@ key 上缺省或为 `null` 的共享字段继承分组值，再使用该字段�
 | `cloak` | Claude | 包含 `mode`、`strict-mode`、`sensitive-words`、`cache-user-id` 的对象。 |
 | `experimental-cch-signing` | Claude | 兼容保留；支持的直连上游已自动签名。 |
 | `rebuild-mid-system-message` | Claude | 重建会话正文中间的 system 消息。 |
+| `native-tool-search` | Claude | 信任自定义 base URL 支持 Anthropic 原生 tool search（`defer_loading` + `tool_reference`），用于 Codex `tool_search`；官方 `api.anthropic.com` 凭证自动启用。 |
 | `fingerprint-profile` | Claude | 可选指纹配置，如 `claude-code-cli`；空值由调用方控制。 |
 | `request-scoped-errors` | Gemini/Interactions、Claude、Codex、xAI、Meta | 覆盖继承的请求级错误规则。 |
 
