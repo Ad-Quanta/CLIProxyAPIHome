@@ -753,29 +753,24 @@ func (r *Repository) ListUsageObservabilityAggregates(ctx context.Context, query
 		CredentialType: query.CredentialType,
 	}
 
-	baseForCount := usageObservabilityAggregateBaseQuery(db.WithContext(contextOrBackground(ctx)), recordQuery, groupBy)
-	groupedForCount := db.WithContext(contextOrBackground(ctx)).
-		Table("(?) AS scoped", baseForCount).
-		Select("scoped.aggregate_id").
-		Group("scoped.aggregate_id")
+	var groupedForCount *gorm.DB
+	if groupBy == "credential" {
+		groupedForCount = usageObservabilityCredentialAggregateGroupedQuery(db.WithContext(contextOrBackground(ctx)), recordQuery)
+	} else {
+		baseForCount := usageObservabilityAggregateBaseQuery(db.WithContext(contextOrBackground(ctx)), recordQuery, groupBy)
+		groupedForCount = db.WithContext(contextOrBackground(ctx)).
+			Table("(?) AS scoped", baseForCount).
+			Select("scoped.aggregate_id").
+			Group("scoped.aggregate_id")
+	}
 	var total int64
 	if errCount := db.WithContext(contextOrBackground(ctx)).Table("(?) AS grouped", groupedForCount).Count(&total).Error; errCount != nil {
 		return UsageObservabilityAggregateResult{}, errCount
 	}
 
 	includeP95ForSort := strings.TrimSpace(query.Metric) == "p95_latency_ms"
-	baseForItems := usageObservabilityAggregateBaseQuery(db.WithContext(contextOrBackground(ctx)), recordQuery, groupBy)
-	itemsQuery := db.WithContext(contextOrBackground(ctx)).
-		Table("(?) AS scoped", baseForItems)
-	if includeP95ForSort {
-		p95Query := usageObservabilityAggregateP95Query(db.WithContext(contextOrBackground(ctx)), recordQuery, groupBy)
-		itemsQuery = itemsQuery.Joins("LEFT JOIN (?) AS p95 ON p95.aggregate_id = scoped.aggregate_id", p95Query)
-	}
 	var rows []usageObservabilityAggregateRow
-	if errFind := itemsQuery.
-		Select(usageObservabilityAggregateSQLSelect(includeP95ForSort)).
-		Group("scoped.aggregate_id").
-		Order(usageObservabilityAggregateSQLOrder(query.Metric, query.Direction)).
+	if errFind := usageObservabilityAggregateItemsQuery(db.WithContext(contextOrBackground(ctx)), recordQuery, groupBy, query.Metric, query.Direction).
 		Limit(query.Limit).
 		Offset(query.Offset).
 		Scan(&rows).Error; errFind != nil {
@@ -926,9 +921,27 @@ func usageObservabilityOverviewRecordQuery(query UsageObservabilityOverviewQuery
 
 func usageObservabilityTotalsSQL(db *gorm.DB, query UsageObservabilityRecordQuery) (UsageObservabilityTotals, usageObservabilityOverviewBounds, error) {
 	var row usageObservabilityTotalsRow
-	scope := usageObservabilityRecordScope(db.Table("usage"), query)
-	if errScan := scope.Session(&gorm.Session{}).Select(usageObservabilityTotalsSQLSelect()).Scan(&row).Error; errScan != nil {
+	// Overview totals only accept narrow usage filters. billing_charge and api_key
+	// are unique per usage row, so the scan stays one row per usage record without
+	// COUNT(DISTINCT id). Auth records are resolved separately per distinct auth_index
+	// instead of joining auth three times for every usage row.
+	scope := usageObservabilityNarrowUsageScope(db.Table("usage").
+		Joins(`LEFT JOIN "billing_charge" ON "billing_charge"."usage_id" = "usage"."id"`).
+		Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`), query)
+	if errScan := scope.Select(usageObservabilityTotalsSQLSelect()).Scan(&row).Error; errScan != nil {
 		return UsageObservabilityTotals{}, usageObservabilityOverviewBounds{}, errScan
+	}
+	if row.RequestCount > 0 {
+		distinctAuthIndexes := usageObservabilityNarrowUsageScope(db.Table("usage"), query).
+			Select(`DISTINCT "usage"."auth_index" AS auth_index`)
+		if errCount := db.Table(`(?) AS "usage"`, distinctAuthIndexes).
+			Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
+			Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
+			Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`).
+			Select(`COUNT(DISTINCT NULLIF(` + usageObservabilitySQLCredentialID() + `, ''))`).
+			Scan(&row.ActiveCredentialCount).Error; errCount != nil {
+			return UsageObservabilityTotals{}, usageObservabilityOverviewBounds{}, errCount
+		}
 	}
 	totals := usageObservabilityTotalsFromRow(&row)
 	percentiles, errPercentiles := usageObservabilityLatencyPercentilesSQL(db, query)
@@ -948,11 +961,10 @@ func usageObservabilityTotalsSQL(db *gorm.DB, query UsageObservabilityRecordQuer
 }
 
 func usageObservabilityTotalsSQLSelect() string {
-	credentialExpr := `NULLIF(` + usageObservabilitySQLCredentialID() + `, '')`
 	cacheReadTokensExpr := usageObservabilitySQLCacheReadTokens(`"usage"`)
 	accountingTotalTokensExpr := usageObservabilitySQLAccountingTotalTokens(`"usage"`)
 	return fmt.Sprintf(`
-		COUNT(DISTINCT "usage"."id") AS request_count,
+		COUNT(*) AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
 		SUM("usage"."input_tokens") AS input_tokens,
@@ -981,10 +993,9 @@ func usageObservabilityTotalsSQLSelect() string {
 		AVG(CASE WHEN "usage"."ttft_ms" > 0 THEN "usage"."ttft_ms" END) AS avg_ttft_ms,
 		COUNT(DISTINCT COALESCE("billing_charge"."user_id", "api_key"."user_id")) AS active_user_count,
 		COUNT(DISTINCT COALESCE("billing_charge"."api_key_id", "api_key"."id")) AS active_client_key_count,
-		COUNT(DISTINCT %s) AS active_credential_count,
 		COUNT(DISTINCT NULLIF("usage"."model", '')) AS active_model_count,
 		MIN("usage"."timestamp") AS min_timestamp,
-		MAX("usage"."timestamp") AS max_timestamp`, cacheReadTokensExpr, accountingTotalTokensExpr, credentialExpr)
+		MAX("usage"."timestamp") AS max_timestamp`, cacheReadTokensExpr, accountingTotalTokensExpr)
 }
 
 func usageObservabilityTotalsFromRow(row *usageObservabilityTotalsRow) UsageObservabilityTotals {
@@ -1491,17 +1502,8 @@ func usageObservabilityAggregateItemsSQL(db *gorm.DB, query UsageObservabilityRe
 		limit = UsageObservabilityDefaultGroupLimit
 	}
 	includeP95ForSort := strings.TrimSpace(metric) == "p95_latency_ms"
-	baseForItems := usageObservabilityAggregateBaseQuery(db, query, groupBy)
-	itemsQuery := db.Table("(?) AS scoped", baseForItems)
-	if includeP95ForSort {
-		p95Query := usageObservabilityAggregateP95Query(db, query, groupBy)
-		itemsQuery = itemsQuery.Joins("LEFT JOIN (?) AS p95 ON p95.aggregate_id = scoped.aggregate_id", p95Query)
-	}
 	var rows []usageObservabilityAggregateRow
-	if errFind := itemsQuery.
-		Select(usageObservabilityAggregateSQLSelect(includeP95ForSort)).
-		Group("scoped.aggregate_id").
-		Order(usageObservabilityAggregateSQLOrder(metric, direction)).
+	if errFind := usageObservabilityAggregateItemsQuery(db, query, groupBy, metric, direction).
 		Limit(limit).
 		Scan(&rows).Error; errFind != nil {
 		return nil, errFind
@@ -1732,6 +1734,182 @@ func usageObservabilityAggregateBaseQuery(db *gorm.DB, query UsageObservabilityR
 	}
 	return usageObservabilityApplyUsageFilters(scope, query).
 		Select(usageObservabilityAggregateBaseSelect(groupBy))
+}
+
+// usageObservabilityAggregateItemsQuery returns ordered aggregate rows without pagination.
+func usageObservabilityAggregateItemsQuery(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string, metric string, direction string) *gorm.DB {
+	includeP95ForSort := strings.TrimSpace(metric) == "p95_latency_ms"
+	if strings.TrimSpace(groupBy) == "credential" {
+		itemsQuery := db.Table("(?) AS scoped", usageObservabilityCredentialAggregateGroupedQuery(db, query))
+		p95Select := "NULL AS p95_latency_ms"
+		if includeP95ForSort {
+			itemsQuery = itemsQuery.Joins("LEFT JOIN (?) AS p95 ON p95.aggregate_id = scoped.aggregate_id", usageObservabilityAggregateP95Query(db, query, groupBy))
+			p95Select = "p95.p95_latency_ms AS p95_latency_ms"
+		}
+		return itemsQuery.
+			Select("scoped.*, " + p95Select).
+			Order(usageObservabilityPreAggregatedSQLOrder(metric, direction))
+	}
+	itemsQuery := db.Table("(?) AS scoped", usageObservabilityAggregateBaseQuery(db, query, groupBy))
+	if includeP95ForSort {
+		itemsQuery = itemsQuery.Joins("LEFT JOIN (?) AS p95 ON p95.aggregate_id = scoped.aggregate_id", usageObservabilityAggregateP95Query(db, query, groupBy))
+	}
+	return itemsQuery.
+		Select(usageObservabilityAggregateSQLSelect(includeP95ForSort)).
+		Group("scoped.aggregate_id").
+		Order(usageObservabilityAggregateSQLOrder(metric, direction))
+}
+
+// usageObservabilityCredentialAggregateGroupedQuery aggregates usage rows by the raw
+// auth_index first and resolves auth records only for those few pre-aggregated rows.
+// Joining auth three times for every usage row dominates query time on large ranges.
+func usageObservabilityCredentialAggregateGroupedQuery(db *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
+	groupExpr := `"usage"."auth_index"`
+	if db.Dialector == nil || db.Dialector.Name() != "postgres" {
+		// SQLite otherwise walks idx_usage_auth_time to avoid a sort and pays a random
+		// table lookup per row; unary plus keeps the cheaper scan plus temp B-tree.
+		groupExpr = `+"usage"."auth_index"`
+	}
+	preAggregated := usageObservabilityUsageBillingScope(db.Table("usage"), query).
+		Select(usageObservabilityCredentialPreAggregateSelect()).
+		Group(groupExpr)
+	idExpr, _ := usageObservabilityAggregateSQLIdentity("credential")
+	// Alias the pre-aggregated rows as "usage" so the shared auth join and identity
+	// expressions resolve against the raw auth_index column unchanged.
+	return db.Table(`(?) AS "usage"`, preAggregated).
+		Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
+		Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
+		Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`).
+		Select(usageObservabilityCredentialAggregateSelect()).
+		Group(idExpr)
+}
+
+func usageObservabilityCredentialPreAggregateSelect() string {
+	accountingTotalTokensExpr := usageObservabilitySQLAccountingTotalTokens(`"usage"`)
+	return fmt.Sprintf(`
+		"usage"."auth_index" AS auth_index,
+		MAX("usage"."auth_type") AS auth_type,
+		MAX("usage"."provider") AS provider,
+		MAX(CASE WHEN "usage"."failed" THEN 'failed' ELSE 'success' END) AS status,
+		COUNT(*) AS request_count,
+		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
+		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
+		SUM("usage"."input_tokens") AS input_tokens,
+		SUM("usage"."output_tokens") AS output_tokens,
+		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
+		SUM("usage"."cached_tokens") AS cached_tokens,
+		SUM(%s) AS cache_read_tokens,
+		SUM("usage"."cache_creation_tokens") AS cache_creation_tokens,
+		SUM("usage"."total_tokens") AS total_tokens,
+		SUM(%s) AS cache_rate_tokens,
+		SUM(CASE WHEN "usage"."token_accounting_quality" = 'inconsistent' THEN 1 ELSE 0 END) AS inconsistent_count,
+		SUM(CASE WHEN "usage"."token_accounting_quality" = 'unclassified' AND "usage"."unclassified_tokens" > 0 THEN 1 ELSE 0 END) AS unclassified_count,
+		SUM(%s) AS accounting_total_tokens,
+		SUM("usage"."accounting_input_tokens") AS accounting_input_tokens,
+		SUM("usage"."uncached_input_tokens") AS uncached_input_tokens,
+		SUM("usage"."accounting_cache_read_tokens") AS accounting_cache_read_tokens,
+		SUM("usage"."accounting_cache_write_tokens") AS accounting_cache_write_tokens,
+		SUM("usage"."accounting_output_tokens") AS accounting_output_tokens,
+		SUM("usage"."non_reasoning_output_tokens") AS non_reasoning_output_tokens,
+		SUM("usage"."accounting_reasoning_tokens") AS accounting_reasoning_tokens,
+		SUM("usage"."unclassified_tokens") AS unclassified_tokens,
+		SUM("billing_charge"."amount") AS total_amount,
+		SUM(CASE WHEN "usage"."latency_ms" >= 0 THEN "usage"."latency_ms" ELSE 0 END) AS latency_sum,
+		SUM(CASE WHEN "usage"."latency_ms" >= 0 THEN 1 ELSE 0 END) AS latency_count,
+		MAX("usage"."timestamp") AS last_used_at`,
+		usageObservabilitySQLCacheReadTokens(`"usage"`),
+		usageObservabilitySQLCacheRateTokens(`"usage"`),
+		accountingTotalTokensExpr,
+	)
+}
+
+func usageObservabilityCredentialAggregateSelect() string {
+	idExpr, labelExpr := usageObservabilityAggregateSQLIdentity("credential")
+	return fmt.Sprintf(`
+		%s AS aggregate_id,
+		COALESCE(NULLIF(MAX(%s), ''), %s) AS aggregate_label,
+		NULL AS metadata_user_id,
+		'' AS metadata_username,
+		NULL AS metadata_api_key_id,
+		'' AS metadata_api_key_label,
+		'' AS metadata_api_key_masked,
+		MAX("usage"."auth_type") AS metadata_credential_type,
+		MAX(%s) AS metadata_credential_id,
+		MAX(%s) AS metadata_auth_index,
+		MAX(%s) AS metadata_credential_provider,
+		MAX(%s) AS metadata_credential_label,
+		MAX(%s) AS metadata_auth_uuid,
+		MAX(%s) AS metadata_auth_next_retry_at,
+		MAX(%s) AS metadata_auth_status,
+		MAX(CASE WHEN %s THEN 1 ELSE 0 END) AS metadata_auth_disabled,
+		MAX(CASE WHEN %s THEN 1 ELSE 0 END) AS metadata_auth_unavailable,
+		MAX("usage"."provider") AS metadata_provider,
+		MAX("usage"."status") AS metadata_status,
+		SUM("usage"."request_count") AS request_count,
+		SUM("usage"."success_count") AS success_count,
+		SUM("usage"."failed_count") AS failed_count,
+		SUM("usage"."input_tokens") AS input_tokens,
+		SUM("usage"."output_tokens") AS output_tokens,
+		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
+		SUM("usage"."cached_tokens") AS cached_tokens,
+		SUM("usage"."cache_read_tokens") AS cache_read_tokens,
+		SUM("usage"."cache_creation_tokens") AS cache_creation_tokens,
+		SUM("usage"."total_tokens") AS total_tokens,
+		SUM("usage"."cache_rate_tokens") AS cache_rate_tokens,
+		SUM("usage"."accounting_total_tokens") AS cache_rate_total_tokens,
+		CASE
+			WHEN SUM("usage"."inconsistent_count") > 0 THEN 'inconsistent'
+			WHEN SUM("usage"."unclassified_count") > 0 THEN 'unclassified'
+			ELSE 'complete'
+		END AS token_accounting_quality,
+		SUM("usage"."accounting_total_tokens") AS accounting_total_tokens,
+		SUM("usage"."accounting_input_tokens") AS accounting_input_tokens,
+		SUM("usage"."uncached_input_tokens") AS uncached_input_tokens,
+		SUM("usage"."accounting_cache_read_tokens") AS accounting_cache_read_tokens,
+		SUM("usage"."accounting_cache_write_tokens") AS accounting_cache_write_tokens,
+		SUM("usage"."accounting_output_tokens") AS accounting_output_tokens,
+		SUM("usage"."non_reasoning_output_tokens") AS non_reasoning_output_tokens,
+		SUM("usage"."accounting_reasoning_tokens") AS accounting_reasoning_tokens,
+		SUM("usage"."unclassified_tokens") AS unclassified_tokens,
+		SUM("usage"."total_amount") AS total_amount,
+		1.0 * SUM("usage"."latency_sum") / NULLIF(SUM("usage"."latency_count"), 0) AS avg_latency_ms,
+		MAX("usage"."last_used_at") AS last_used_at`,
+		idExpr,
+		labelExpr,
+		idExpr,
+		usageObservabilitySQLCredentialID(),
+		usageObservabilitySQLAuthIndex(),
+		usageObservabilitySQLAuthProvider(),
+		usageObservabilitySQLAuthLabel(),
+		usageObservabilitySQLAuthUUID(),
+		usageObservabilitySQLAuthNextRetryAfter(),
+		usageObservabilitySQLAuthStatus(),
+		usageObservabilitySQLAuthDisabled(),
+		usageObservabilitySQLAuthUnavailable(),
+	)
+}
+
+// usageObservabilityPreAggregatedSQLOrder orders rows of an already grouped subquery,
+// so every sort key is a plain column reference.
+func usageObservabilityPreAggregatedSQLOrder(metric string, direction string) string {
+	metricColumn := "scoped.request_count"
+	switch strings.TrimSpace(metric) {
+	case "total_tokens":
+		metricColumn = "scoped.accounting_total_tokens"
+	case "total_amount":
+		metricColumn = "COALESCE(scoped.total_amount, 0)"
+	case "failed_count":
+		metricColumn = "scoped.failed_count"
+	case "avg_latency_ms":
+		metricColumn = "COALESCE(scoped.avg_latency_ms, 0)"
+	case "p95_latency_ms":
+		metricColumn = "COALESCE(p95.p95_latency_ms, 0)"
+	}
+	sortDirection := "DESC"
+	if strings.TrimSpace(direction) == "asc" {
+		sortDirection = "ASC"
+	}
+	return metricColumn + " " + sortDirection + ", scoped.last_used_at DESC, scoped.aggregate_label ASC"
 }
 
 func usageObservabilityAggregateP95Query(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string) *gorm.DB {
