@@ -78,7 +78,7 @@ type BillingBalanceRecord struct {
 func (BillingBalanceRecord) TableName() string { return "billing_balance_record" }
 
 type BillingChargeRecord struct {
-	ID               string    `gorm:"column:id;primaryKey"`
+	ID               string    `gorm:"column:id;primaryKey;index:idx_billing_charge_time_order,priority:2,sort:desc"`
 	UsageID          uint      `gorm:"column:usage_id;not null;uniqueIndex"`
 	PayloadHash      string    `gorm:"column:payload_hash;not null;uniqueIndex"`
 	UserID           *uint     `gorm:"column:user_id;index:idx_billing_charge_user_time,priority:1"`
@@ -100,7 +100,7 @@ type BillingChargeRecord struct {
 	MatchedPriceRule string    `gorm:"column:matched_price_rule"`
 	PriceSnapshot    JSONB     `gorm:"column:price_snapshot;not null"`
 	RequestSummary   string    `gorm:"column:request_summary;type:text"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
 }
 
 func (BillingChargeRecord) TableName() string { return "billing_charge" }

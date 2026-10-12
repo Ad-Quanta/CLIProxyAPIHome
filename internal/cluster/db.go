@@ -418,6 +418,8 @@ func migrateUsageObservabilityIndexes(db *gorm.DB) error {
 		return fmt.Errorf("database connection is nil")
 	}
 	statements := []string{
+		// Match the literal schema-version predicate used by pending-row queries.
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_usage_token_accounting_pending_v2 ON "usage" ("id") WHERE "token_accounting_version" <> %d`, UsageTokenAccountingSchemaVersion),
 		`CREATE INDEX IF NOT EXISTS idx_usage_provider_lower_time ON "usage" (LOWER("provider"), "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_auth_type_normalized_time ON "usage" (LOWER(REPLACE("auth_type", '-', '_')), "timestamp" DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_event_type_time ON "usage" ("event_type", "timestamp" DESC)`,
