@@ -4017,6 +4017,7 @@ Query 参数：
 | `requests.passthrough-headers` | boolean | 将上游响应头透传给下游客户端。 |
 | `requests.streaming.keepalive-seconds` | integer | SSE heartbeat 间隔秒数；`<=0` 禁用。 |
 | `requests.streaming.bootstrap-retries` | integer | Streaming 首字节前重试次数；`<=0` 禁用。 |
+| `requests.streaming.send-keepalive-before-ft` | boolean | 当 `keepalive-seconds > 0` 时，是否在收到首个 token 前发送 SSE heartbeat。 |
 | `requests.nonstream-keepalive-interval` | integer | 非 streaming 响应的空行 keepalive 间隔秒数。 |
 | `observability.logs.debug` | boolean | 启用 debug logging/features。 |
 | `observability.pprof.enable` | boolean | 启用 pprof server。 |

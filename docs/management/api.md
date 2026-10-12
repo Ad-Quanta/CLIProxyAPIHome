@@ -4019,6 +4019,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `requests.passthrough-headers` | boolean | Passes upstream response headers to downstream clients. |
 | `requests.streaming.keepalive-seconds` | integer | SSE heartbeat interval in seconds; `<=0` disables it. |
 | `requests.streaming.bootstrap-retries` | integer | Streaming retries before first byte; `<=0` disables it. |
+| `requests.streaming.send-keepalive-before-ft` | boolean | Sends SSE heartbeats before the first token arrives when `keepalive-seconds > 0`. |
 | `requests.nonstream-keepalive-interval` | integer | Blank-line keepalive interval for non-streaming responses. |
 | `observability.logs.debug` | boolean | Enables debug logging/features. |
 | `observability.pprof.enable` | boolean | Enables pprof server. |
