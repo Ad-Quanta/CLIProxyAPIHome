@@ -2081,6 +2081,16 @@ the current value without downloading the credential JSON:
 | `disable-cooling` | boolean | Optional credential cooling override. `true` disables cooling, `false` explicitly enables it, and the field is omitted when unset so the credential inherits the global setting. |
 | `request-retry` | integer | Optional credential override for additional retry rounds. `0` disables additional rounds, and the field is omitted when unset so the credential inherits the global setting. |
 
+v8 list entries additionally expose the following fields only when an active quota plugin registered in the Home process matches. Store-installed plugins are matched only when Home loads them, for example with `plugins.configs.<pluginID>.load-in-home: true`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `supports_quota` | boolean | `true` when a quota plugin matches; otherwise omitted. |
+| `quota_provider` | string | The credential provider key. |
+| `quota_plugin_id` | string | Plugin ID selected by the host's two-pass precedence; use it directly in `/plugins/:id/quota`. |
+
+These fields are not added to the v0 `/auth-files` response. Matching normalizes provider keys and excludes fused plugins; plugins may explicitly support built-in providers. Declarative `quota_probe` metadata or an available Home collector alone does not advertise plugin quota support.
+
 ### GET `/credentials/models?name=<name-or-id>`
 
 Returns models associated with an auth file or auth ID.
@@ -4221,7 +4231,7 @@ The tables in this appendix compare paths relative to `/v0/management` and `/v8/
 | `/meta-auth-url` | `/oauth/auth-url?provider=meta` |
 | `/<plugin-provider>-auth-url` | `/oauth/auth-url?provider=<plugin-provider>` |
 
-The v0 callback is an authenticated POST; v8 additionally accepts GET and validates state without the management key. `/credentials/refresh`, `/oauth/session`, `/routing/cooldown/reset`, credential/plugin quota operations, and `DELETE /plugins/:id` are registered explicitly in v8, not by copying all SDK v0 endpoints.
+The v0 callback is an authenticated POST; v8 additionally accepts GET and validates state without the management key. `GET /credentials`, `/credentials/refresh`, `/oauth/session`, `/routing/cooldown/reset`, credential/plugin quota operations, and `DELETE /plugins/:id` are registered explicitly in v8, not by copying all SDK v0 endpoints.
 
 ### Configuration Layout Mapping
 

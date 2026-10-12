@@ -20,8 +20,12 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
-// ListAuthFiles returns an auth files.
+// ListAuthFiles preserves the v0 credential list contract without plugin quota metadata.
 func (h *Handler) ListAuthFiles(c *gin.Context) {
+	h.listAuthFiles(c, nil)
+}
+
+func (h *Handler) listAuthFiles(c *gin.Context, quotaPluginIDs map[string]string) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	auths, errAuths := h.repo.ListAuths(ctx)
@@ -51,6 +55,11 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 			continue
 		}
 		entry := authFileEntry(auth)
+		if pluginID := quotaPluginIDs[strings.ToLower(strings.TrimSpace(auth.Provider))]; pluginID != "" {
+			entry["supports_quota"] = true
+			entry["quota_provider"] = auth.Provider
+			entry["quota_plugin_id"] = pluginID
+		}
 		observed, observedOK := observedCredentials[auth.ID]
 		if observationRead != nil && observedOK {
 			applyInFlightObservationToAuthFile(entry, *observationRead, observed)

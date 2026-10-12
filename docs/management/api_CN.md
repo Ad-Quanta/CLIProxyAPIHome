@@ -2079,6 +2079,16 @@ Thinking levels 会去除首尾空白、转小写并去重。`none` 启用零预
 | `disable-cooling` | boolean | 可选凭证级冷却覆盖。`true` 禁用冷却，`false` 显式启用；未设置时省略该字段并继承全局设置。 |
 | `request-retry` | integer | 可选凭证级额外重试轮次覆盖。`0` 禁用额外轮次；未设置时省略该字段并继承全局设置。 |
 
+v8 列表项仅在匹配到 Home 进程中已注册的可用额度插件时额外返回以下字段。通过商店安装的插件只有被 Home 加载后才参与匹配，例如设置 `plugins.configs.<pluginID>.load-in-home: true`。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `supports_quota` | boolean | 匹配到额度插件时为 `true`，否则省略。 |
+| `quota_provider` | string | 凭证的 provider key。 |
+| `quota_plugin_id` | string | 后端按插件宿主两轮匹配规则选出的插件 ID，可直接用于 `/plugins/:id/quota`。 |
+
+这些字段不添加到 v0 的 `/auth-files` 响应。匹配会归一化 provider key，排除熔断插件；插件可显式支持内置 provider。仅带有 `quota_probe` 或具有 Home 内置采集器的凭证不会因此声明支持插件额度。
+
 ### GET `/credentials/models?name=<name-or-id>`
 
 返回指定 auth file 或 auth ID 对应的模型。
@@ -4219,7 +4229,7 @@ Payload 嵌套结构：
 | `/meta-auth-url` | `/oauth/auth-url?provider=meta` |
 | `/<plugin-provider>-auth-url` | `/oauth/auth-url?provider=<plugin-provider>` |
 
-v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state 校验，不要求管理密钥。`/credentials/refresh`、`/oauth/session`、`/routing/cooldown/reset`、凭证/插件额度操作及 `DELETE /plugins/:id` 在 v8 显式注册，并不是复制 SDK 所有 v0 接口。
+v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state 校验，不要求管理密钥。`GET /credentials`、`/credentials/refresh`、`/oauth/session`、`/routing/cooldown/reset`、凭证/插件额度操作及 `DELETE /plugins/:id` 在 v8 显式注册，并不是复制 SDK 所有 v0 接口。
 
 ### 配置布局映射
 
