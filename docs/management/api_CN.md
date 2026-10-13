@@ -1523,6 +1523,8 @@ Query 参数：
 
 ### GET `/billing/charges`
 
+扣款查询的 `input_tokens` 与 `output_tokens` 使用读取时归一化的展示口径：关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时，输入包含未缓存输入、缓存读取与缓存写入，输出包含普通输出与推理 Token；尚未回填、非完整或缺失 usage 的记录保留扣款快照原值。此转换不改写数据库，不改变扣款金额、价格快照、余额或价格档位选择。 `/billing/overview` 的输入与输出合计按每条扣款使用相同规则求和；`cache_tokens` 保持不变。
+
 列出扣费记录，并返回管理员上下文。响应会暴露用户 ID、脱敏 API-key 元数据、价格快照、匹配的价格规则、request ID、endpoint，以及 `balance_before`/`balance_after`。计费扣费响应永不暴露原始 API key。
 
 查询参数：

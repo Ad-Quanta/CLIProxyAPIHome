@@ -1524,6 +1524,8 @@ Response fields:
 
 ### GET `/billing/charges`
 
+Charge queries normalize `input_tokens` and `output_tokens` at read time. When the associated usage has v2 token accounting with `complete` quality, input includes uncached input, cache reads, and cache writes; output includes non-reasoning and reasoning tokens. Pending backfills, non-complete accounting, and missing usage retain the original charge snapshot counters. This presentation conversion does not rewrite stored records or change amounts, price snapshots, balances, or price-band selection. `/billing/overview` sums input and output using the same per-charge rule; `cache_tokens` is unchanged.
+
 Lists billing charge records with administrator context. Responses expose user ID, masked API-key metadata, price snapshot, matched price rule, request ID, endpoint, and `balance_before`/`balance_after`. Billing charge responses never expose raw API keys.
 
 Query parameters:
