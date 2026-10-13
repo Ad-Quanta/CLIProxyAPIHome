@@ -78,6 +78,9 @@ func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
 	if auth == nil {
 		return nil, fmt.Errorf("auth is nil")
 	}
+	if auth.RuntimeProjection {
+		return nil, coreauth.ErrRuntimeProjectionPersist
+	}
 	if strings.TrimSpace(auth.ID) == "" {
 		return nil, fmt.Errorf("auth id is required")
 	}
