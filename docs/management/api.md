@@ -3240,6 +3240,7 @@ The response contains `items`, `total`, `limit`, `offset`, and `sort`. `items[]`
 | `client` | object | User, client key ID/label, redacted `client_key_masked`, and caller client IP. |
 | `error` | object | Redacted error status, upstream status, reason, message, and body preview. |
 | `tokens` / `performance` / `billing` | object | Token, latency/TTFT/TPS, and billing metadata. `tokens.input_tokens` and `tokens.output_tokens` follow the usage display rule in Usage Observability Conventions; list, detail, and export responses use the same values. |
+| `token_breakdown` | object | Canonical v2 mutually exclusive input/output/unclassified token buckets, the same object as `/usage/records`. Consume only when `capabilities.usage_token_breakdown_v2=true`; otherwise read the legacy `tokens` counters. |
 | `related.request_log` | object | Request log link metadata, including `home_ip` and `home_port` when available. Local availability is checked against the filesystem. For a remote Home, `available=true` and `download_url` mean cluster forwarding is configured and the download can be attempted. |
 
 ### GET `/request-events/filter-options`

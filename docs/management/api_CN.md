@@ -3238,6 +3238,7 @@ Query 参数：
 | `client` | object | 用户、client key ID/label、脱敏 `client_key_masked` 和 client IP。 |
 | `error` | object | 脱敏错误状态、上游状态、原因、消息和 body preview。 |
 | `tokens` / `performance` / `billing` | object | token、latency/TTFT/TPS 和 billing 关联信息。`tokens.input_tokens` 与 `tokens.output_tokens` 使用“用量观测接口通用约定”中的显示口径；列表、详情和导出返回相同数值。 |
+| `token_breakdown` | object | 规范化 v2 互斥的 input/output/unclassified token 分组，与 `/usage/records` 返回的对象相同。仅当 `capabilities.usage_token_breakdown_v2=true` 时消费；否则读取旧版 `tokens` 计数器。 |
 | `related.request_log` | object | request log 关联信息；可用时包含 `home_ip` 和 `home_port`。本地可用性按文件系统精确检查；远端 Home 在集群转发已配置时返回 `available=true` 和 download URL，表示可以尝试下载。 |
 
 ### GET `/request-events/filter-options`
