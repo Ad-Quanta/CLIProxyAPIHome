@@ -80,6 +80,65 @@ func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
 	}
 }
 
+func TestGetLogsSearchFiltersLineContentAndEchoesSearch(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	records := []cluster.AppLogRecord{
+		{Timestamp: now.Add(-time.Minute), ClientIP: "10.0.0.6", RequestID: "req-other", HomeIP: "192.0.2.10", Level: "info", Line: "routine poll finished", CreatedAt: now.Add(-time.Minute)},
+		{Timestamp: now, ClientIP: "10.0.0.5", RequestID: "req-wanted", HomeIP: "192.0.2.10", Level: "warn", Line: "Upstream TIMEOUT exceeded", CreatedAt: now},
+	}
+	if errCreate := db.Create(&records).Error; errCreate != nil {
+		t.Fatalf("create logs: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/logs", handler.GetLogs)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/logs?search=timeout%25&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Logs []struct {
+			Line string `json:"line"`
+		} `json:"logs"`
+		Total  int64  `json:"total"`
+		Search string `json:"search"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.Total != 0 || len(body.Logs) != 0 {
+		t.Fatalf("escaped wildcard search total=%d len=%d, want 0", body.Total, len(body.Logs))
+	}
+
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/logs?search=timeout&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.Total != 1 || len(body.Logs) != 1 || body.Logs[0].Line != "Upstream TIMEOUT exceeded" {
+		t.Fatalf("search total=%d logs=%+v, want the timeout line only", body.Total, body.Logs)
+	}
+	if body.Search != "timeout" {
+		t.Fatalf("search echo = %q, want %q", body.Search, "timeout")
+	}
+}
+
 func TestDeleteLogsClearsDatabaseAppLogs(t *testing.T) {
 	t.Parallel()
 

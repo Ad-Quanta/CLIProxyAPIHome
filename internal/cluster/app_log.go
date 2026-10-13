@@ -27,6 +27,7 @@ type AppLogQuery struct {
 	ClientIP  string
 	RequestID string
 	Level     string
+	Search    string
 	After     *time.Time
 	Before    *time.Time
 	Limit     int
@@ -155,6 +156,11 @@ func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	level := strings.TrimSpace(opts.Level)
 	if level != "" {
 		query = query.Where("level = ?", normalizeAppLogLevel(level))
+	}
+	search := strings.TrimSpace(opts.Search)
+	if search != "" {
+		pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(search)) + "%"
+		query = query.Where("LOWER(line) LIKE ? ESCAPE '!'", pattern)
 	}
 	if opts.After != nil {
 		query = query.Where("timestamp > ?", opts.After.UTC())
