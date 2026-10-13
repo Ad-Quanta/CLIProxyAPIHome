@@ -1523,6 +1523,8 @@ Query 参数：
 
 ### GET `/billing/charges`
 
+扣款查询的 `input_tokens` 与 `output_tokens` 使用读取时归一化的展示口径：关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时，输入包含未缓存输入、缓存读取与缓存写入，输出包含普通输出与推理 Token；尚未回填、非完整或缺失 usage 的记录保留扣款快照原值。此转换不改写数据库，不改变扣款金额、价格快照、余额或价格档位选择。 `/billing/overview` 的输入与输出合计按每条扣款使用相同规则求和；`cache_tokens` 保持不变。
+
 列出扣费记录，并返回管理员上下文。响应会暴露用户 ID、脱敏 API-key 元数据、价格快照、匹配的价格规则、request ID、endpoint，以及 `balance_before`/`balance_after`。计费扣费响应永不暴露原始 API key。
 
 查询参数：
@@ -3026,6 +3028,8 @@ usage 活动归属于通过 `auth_index` 解析出的当前 DB 凭证，因此�
 
 只有 `capabilities.usage_token_breakdown_v2=true` 时，客户端才能消费规范化 Token Accounting。客户端必须读取该显式能力，不能通过探测 usage 路由推断支持，也不能使用旧 Token 字段自行拼装明细。能力为 `false` 时，服务端可能已经为新归一化记录返回 `token_breakdown`，但所选范围仍可能包含等待回填的历史记录。旧的 `input_tokens`、`output_tokens`、`reasoning_tokens`、`cached_tokens`、`cache_read_tokens`、`cache_creation_tokens` 和 `total_tokens` 继续用于诊断与向后兼容；这些字段并非互斥，不能直接堆叠求和。
 
+`input_tokens` 与 `output_tokens` 在以下接口使用同一显示口径：`/usage/overview`（`totals`、`trend[]`、`model_efficiency[]` 与 `top`）、`/usage/records`、`/usage/records/:id`、`/usage/export`、`/usage/aggregates`、`/usage/realtime`（`current_usage[]`）、`/usage/session-tree`，以及 `/request-events` 的列表、详情和导出。该口径与 `/billing/charges`、`/billing/overview` 一致。usage 记录为 Token Accounting v2 且质量为 `complete` 时，`input_tokens` 包含未缓存输入、缓存读取和缓存写入，`output_tokens` 包含普通输出与推理 Token；等待回填以及 `unclassified`、`inconsistent` 记录保留原始计数。聚合结果按该逐条口径求和。`reasoning_tokens`、`cached_tokens`、`cache_read_tokens`、`cache_creation_tokens`、`total_tokens`、`token_breakdown` 与 `performance.tps` 不变。该转换只在读取时进行，不改写已存储的 usage 记录。
+
 能力启用后，`totals`、每个 `trend[]` 桶、每条 usage record 和每个 aggregate item 都包含以下结构：
 
 ```json
@@ -3162,7 +3166,7 @@ Query 参数：
 | --- | --- | --- | --- |
 | `session_id` / `root_session_id` / `request_id` / `id` | string | 无 | 待检索的会话或请求标识（支持原始名称、带前缀标识或规范化 UUIDv8）。传入子任务、具体请求 ID 或 `id` 别名时会自动解析顶层根会话并返回全量层级树。 |
 
-响应包含 `root_session_id`、`total_sessions`、`total_requests`、`total_tokens` 和 `tree[]`。每个树节点包含该分支的累计 Token 统计、起止时间、报错次数、可选子代理节点元数据（`node_kind`、`is_fork`、`is_compaction`）、子分支列表（`children[]`）与请求轮次时间线（`timeline[]`）。
+响应包含 `root_session_id`、`total_sessions`、`total_requests`、`total_tokens` 和 `tree[]`。每个树节点包含该分支的累计 Token 统计（`input_tokens` 与 `output_tokens` 使用 usage 显示口径）、起止时间、报错次数、可选子代理节点元数据（`node_kind`、`is_fork`、`is_compaction`）、子分支列表（`children[]`）与请求轮次时间线（`timeline[]`）。
 
 ### GET `/usage/aggregates`
 
@@ -3233,7 +3237,7 @@ Query 参数：
 | `credential` | object | 执行凭证类型、ID、auth index、provider、label、source 和脱敏 `api_key_preview`。 |
 | `client` | object | 用户、client key ID/label、脱敏 `client_key_masked` 和 client IP。 |
 | `error` | object | 脱敏错误状态、上游状态、原因、消息和 body preview。 |
-| `tokens` / `performance` / `billing` | object | token、latency/TTFT/TPS 和 billing 关联信息。 |
+| `tokens` / `performance` / `billing` | object | token、latency/TTFT/TPS 和 billing 关联信息。`tokens.input_tokens` 与 `tokens.output_tokens` 使用“用量观测接口通用约定”中的显示口径；列表、详情和导出返回相同数值。 |
 | `related.request_log` | object | request log 关联信息；可用时包含 `home_ip` 和 `home_port`。本地可用性按文件系统精确检查；远端 Home 在集群转发已配置时返回 `available=true` 和 download URL，表示可以尝试下载。 |
 
 ### GET `/request-events/filter-options`

@@ -464,14 +464,36 @@ func (r *Repository) ListBillingCharges(ctx context.Context, query BillingCharge
 		return BillingChargeResult{}, errCount
 	}
 
-	var records []BillingChargeRecord
-	if errFind := scope.Order(`"billing_charge"."created_at" DESC, "billing_charge"."id" DESC`).Limit(query.Limit).Offset(query.Offset).Find(&records).Error; errFind != nil {
+	var rows []struct {
+		BillingChargeRecord `gorm:"embedded"`
+		DisplayInputTokens  int64
+		DisplayOutputTokens int64
+	}
+	if errFind := scope.
+		Joins(`LEFT JOIN "usage" AS "billing_usage" ON "billing_usage"."id" = "billing_charge"."usage_id"`).
+		Select(`"billing_charge".*, ` + billingDisplayTokenSQL("input_tokens") + ` AS display_input_tokens, ` + billingDisplayTokenSQL("output_tokens") + ` AS display_output_tokens`).
+		Order(`"billing_charge"."created_at" DESC, "billing_charge"."id" DESC`).Limit(query.Limit).Offset(query.Offset).Find(&rows).Error; errFind != nil {
 		return BillingChargeResult{}, errFind
+	}
+	records := make([]BillingChargeRecord, len(rows))
+	for index, row := range rows {
+		records[index] = row.BillingChargeRecord
+		records[index].InputTokens = row.DisplayInputTokens
+		records[index].OutputTokens = row.DisplayOutputTokens
 	}
 	return BillingChargeResult{
 		Records: records,
 		Total:   total,
 	}, nil
+}
+
+// billingDisplayTokenSQL keeps list and aggregate presentation consistent without
+// rewriting charge snapshots or changing the counters used to calculate charges.
+// column is an internal token column name, never request input.
+func billingDisplayTokenSQL(column string) string {
+	return fmt.Sprintf(`CASE WHEN "billing_usage"."token_accounting_version" = %d AND "billing_usage"."token_accounting_quality" = '%s'
+		THEN "billing_usage"."accounting_%s" ELSE "billing_charge"."%s" END`,
+		UsageTokenAccountingSchemaVersion, UsageTokenAccountingQualityComplete, column, column)
 }
 
 func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQuery) (BillingOverview, error) {
@@ -493,16 +515,18 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		MinCreatedAt      sql.NullString `gorm:"column:min_created_at"`
 		MaxCreatedAt      sql.NullString `gorm:"column:max_created_at"`
 	}
-	if errScan := chargeScope.Select(`
+	if errScan := chargeScope.
+		Joins(`LEFT JOIN "usage" AS "billing_usage" ON "billing_usage"."id" = "billing_charge"."usage_id"`).
+		Select(`
 		COALESCE(SUM("billing_charge"."amount"), 0) AS total_charge_amount,
 		COUNT(*) AS request_count,
-		COALESCE(SUM("billing_charge"."input_tokens"), 0) AS input_tokens,
-		COALESCE(SUM("billing_charge"."output_tokens"), 0) AS output_tokens,
+		COALESCE(SUM(` + billingDisplayTokenSQL("input_tokens") + `), 0) AS input_tokens,
+		COALESCE(SUM(` + billingDisplayTokenSQL("output_tokens") + `), 0) AS output_tokens,
 		COALESCE(SUM("billing_charge"."cache_tokens"), 0) AS cache_tokens,
 		COUNT(DISTINCT "billing_charge"."user_id") AS active_user_count,
 		MIN("billing_charge"."created_at") AS min_created_at,
 		MAX("billing_charge"."created_at") AS max_created_at`,
-	).Scan(&chargeTotals).Error; errScan != nil {
+		).Scan(&chargeTotals).Error; errScan != nil {
 		return BillingOverview{}, errScan
 	}
 

@@ -363,6 +363,8 @@ type usageObservabilityRecordRow struct {
 	CacheReadTokensPresent     bool            `gorm:"column:cache_read_tokens_present"`
 	CacheCreationTokens        int64           `gorm:"column:cache_creation_tokens"`
 	TotalTokens                int64           `gorm:"column:total_tokens"`
+	DisplayInputTokens         int64           `gorm:"column:display_input_tokens"`
+	DisplayOutputTokens        int64           `gorm:"column:display_output_tokens"`
 	TokenAccountingVersion     int             `gorm:"column:token_accounting_version"`
 	TokenAccountingQuality     string          `gorm:"column:token_accounting_quality"`
 	AccountingTotalTokens      int64           `gorm:"column:accounting_total_tokens"`
@@ -967,8 +969,8 @@ func usageObservabilityTotalsSQLSelect() string {
 		COUNT(*) AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
-		SUM("usage"."input_tokens") AS input_tokens,
-		SUM("usage"."output_tokens") AS output_tokens,
+		SUM(%s) AS input_tokens,
+		SUM(%s) AS output_tokens,
 		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
 		SUM("usage"."cached_tokens") AS cached_tokens,
 		SUM(%s) AS cache_read_tokens,
@@ -995,7 +997,12 @@ func usageObservabilityTotalsSQLSelect() string {
 		COUNT(DISTINCT COALESCE("billing_charge"."api_key_id", "api_key"."id")) AS active_client_key_count,
 		COUNT(DISTINCT NULLIF("usage"."model", '')) AS active_model_count,
 		MIN("usage"."timestamp") AS min_timestamp,
-		MAX("usage"."timestamp") AS max_timestamp`, cacheReadTokensExpr, accountingTotalTokensExpr)
+		MAX("usage"."timestamp") AS max_timestamp`,
+		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens"),
+		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens"),
+		cacheReadTokensExpr,
+		accountingTotalTokensExpr,
+	)
 }
 
 func usageObservabilityTotalsFromRow(row *usageObservabilityTotalsRow) UsageObservabilityTotals {
@@ -1116,8 +1123,8 @@ func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery
 	baseSelect := fmt.Sprintf(`
 		%s AS bucket_unix,
 		"usage"."latency_ms" AS latency_ms,
-		"usage"."input_tokens" AS input_tokens,
-		"usage"."output_tokens" AS output_tokens,
+		%s AS input_tokens,
+		%s AS output_tokens,
 		"usage"."reasoning_tokens" AS reasoning_tokens,
 		"usage"."cached_tokens" AS cached_tokens,
 		%s AS cache_read_tokens,
@@ -1135,7 +1142,13 @@ func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery
 		"usage"."accounting_reasoning_tokens" AS accounting_reasoning_tokens,
 		"usage"."unclassified_tokens" AS unclassified_tokens,
 		"usage"."failed" AS failed,
-		"billing_charge"."amount" AS amount`, bucketExpr, cacheReadTokensExpr, accountingTotalTokensExpr)
+		"billing_charge"."amount" AS amount`,
+		bucketExpr,
+		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens"),
+		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens"),
+		cacheReadTokensExpr,
+		accountingTotalTokensExpr,
+	)
 	base := usageObservabilityUsageBillingScope(db.Table("usage"), query).Select(baseSelect, bucketArgs...)
 	var rows []usageObservabilityTrendBucketRow
 	if errFind := db.Table("(?) AS trend_source", base).
@@ -1794,8 +1807,8 @@ func usageObservabilityCredentialPreAggregateSelect() string {
 		COUNT(*) AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
-		SUM("usage"."input_tokens") AS input_tokens,
-		SUM("usage"."output_tokens") AS output_tokens,
+		SUM(%s) AS input_tokens,
+		SUM(%s) AS output_tokens,
 		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
 		SUM("usage"."cached_tokens") AS cached_tokens,
 		SUM(%s) AS cache_read_tokens,
@@ -1817,6 +1830,8 @@ func usageObservabilityCredentialPreAggregateSelect() string {
 		SUM(CASE WHEN "usage"."latency_ms" >= 0 THEN "usage"."latency_ms" ELSE 0 END) AS latency_sum,
 		SUM(CASE WHEN "usage"."latency_ms" >= 0 THEN 1 ELSE 0 END) AS latency_count,
 		MAX("usage"."timestamp") AS last_used_at`,
+		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens"),
+		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens"),
 		usageObservabilitySQLCacheReadTokens(`"usage"`),
 		usageObservabilitySQLCacheRateTokens(`"usage"`),
 		accountingTotalTokensExpr,
@@ -2035,8 +2050,8 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		"usage"."timestamp" AS timestamp,
 		"usage"."latency_ms" AS latency_ms,
 		"usage"."failed" AS failed,
-		"usage"."input_tokens" AS input_tokens,
-		"usage"."output_tokens" AS output_tokens,
+		%s AS input_tokens,
+		%s AS output_tokens,
 		"usage"."reasoning_tokens" AS reasoning_tokens,
 		"usage"."cached_tokens" AS cached_tokens,
 		%s AS cache_read_tokens,
@@ -2073,11 +2088,22 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		authStatusExpr,
 		authDisabledExpr,
 		authUnavailableExpr,
+		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens"),
+		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens"),
 		usageObservabilitySQLCacheReadTokens(`"usage"`),
 		usageObservabilitySQLAccountingTotalTokens(`"usage"`),
 		usageObservabilitySQLCacheRateTokens(`"usage"`),
 		usageObservabilitySQLAccountingTotalTokens(`"usage"`),
 	)
+}
+
+// usageObservabilitySQLDisplayTokens returns the Management display value for
+// input_tokens or output_tokens. Complete v2 rows use canonical accounting totals,
+// matching billingDisplayTokenSQL; pending, non-complete, and legacy rows keep the
+// raw counter. column is an internal token column name, never request input.
+func usageObservabilitySQLDisplayTokens(table string, column string) string {
+	return fmt.Sprintf(`CASE WHEN %s."token_accounting_version" = %d AND %s."token_accounting_quality" = '%s' THEN %s."accounting_%s" ELSE %s."%s" END`,
+		table, UsageTokenAccountingSchemaVersion, table, UsageTokenAccountingQualityComplete, table, column, table, column)
 }
 
 func usageObservabilitySQLAccountingTotalTokens(table string) string {
@@ -2289,6 +2315,8 @@ func usageObservabilityRecordSelect() string {
 		"usage"."cache_read_tokens_present" AS cache_read_tokens_present,
 		"usage"."cache_creation_tokens" AS cache_creation_tokens,
 		"usage"."total_tokens" AS total_tokens,
+		` + usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens") + ` AS display_input_tokens,
+		` + usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens") + ` AS display_output_tokens,
 		"usage"."token_accounting_version" AS token_accounting_version,
 		"usage"."token_accounting_quality" AS token_accounting_quality,
 		"usage"."accounting_total_tokens" AS accounting_total_tokens,
@@ -2900,8 +2928,8 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 		ReasoningEffort:    strings.TrimSpace(row.ReasoningEffort),
 		ExecutorType:       strings.TrimSpace(row.ExecutorType),
 		Tokens: UsageObservabilityTokens{
-			InputTokens:         row.InputTokens,
-			OutputTokens:        row.OutputTokens,
+			InputTokens:         row.DisplayInputTokens,
+			OutputTokens:        row.DisplayOutputTokens,
 			ReasoningTokens:     row.ReasoningTokens,
 			CachedTokens:        row.CachedTokens,
 			CacheReadTokens:     cacheReadTokens,
@@ -3416,8 +3444,8 @@ func (a *usageObservabilityAggregateAccumulator) add(row *usageObservabilityReco
 	} else {
 		a.Item.SuccessCount++
 	}
-	a.Item.InputTokens += row.InputTokens
-	a.Item.OutputTokens += row.OutputTokens
+	a.Item.InputTokens += row.DisplayInputTokens
+	a.Item.OutputTokens += row.DisplayOutputTokens
 	a.Item.ReasoningTokens += row.ReasoningTokens
 	a.Item.CachedTokens += row.CachedTokens
 	a.Item.CacheReadTokens += normalizedUsageCacheReadTokens(row.Provider, row.ExecutorType, row.CachedTokens, row.CacheReadTokens, row.CacheReadTokensPresent)
@@ -4334,7 +4362,10 @@ func (r *Repository) GetSessionTree(ctx context.Context, identifier string) (*Se
 	}
 
 	// Step 2: Query all records belonging to this family tree (bounded to prevent runaway memory usage).
-	const sessionTreeColumns = "id, timestamp, request_id, session_id, parent_session_id, root_session_id, model, provider, latency_ms, ttft_ms, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, failed, fail_status_code, upstream_status_code, payload"
+	sessionTreeColumns := "id, timestamp, request_id, session_id, parent_session_id, root_session_id, model, provider, latency_ms, ttft_ms, " +
+		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens") + " AS input_tokens, " +
+		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens") + " AS output_tokens, " +
+		"reasoning_tokens, cached_tokens, total_tokens, failed, fail_status_code, upstream_status_code, payload"
 	var truncated bool
 
 	var records []UsageRecord
