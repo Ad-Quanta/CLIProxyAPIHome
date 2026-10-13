@@ -3357,6 +3357,7 @@ Query parameters:
 | `client_ip` | string | Optional CPA client IP filter. |
 | `request_id` | string | Optional request ID filter against stored IDs. An 8-character value matches the literal suffix; other lengths match exactly. Returns all matching log records with short display IDs; `%` and `_` are not wildcards. |
 | `level` | string | Optional log level filter. |
+| `search` | string | Optional case-insensitive contains match over the log `line` content. When set, the response includes a `search` field echoing the applied value so clients can detect support. |
 | `after` | integer or RFC3339 | Optional timestamp lower bound. |
 | `before` | integer or RFC3339 | Optional timestamp upper bound. |
 | `limit` | integer | Maximum returned record count. Default is `100`, maximum is `1000`. |

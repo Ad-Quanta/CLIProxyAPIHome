@@ -3355,6 +3355,7 @@ Query 参数：
 | `client_ip` | string | 可选 CPA client IP 过滤条件。 |
 | `request_id` | string | 对存储 ID 的可选筛选。输入 8 位时按字面后缀筛选，其他长度精确匹配。返回所有匹配日志，响应中使用短显示 ID；`%` 和 `_` 不作为通配符。 |
 | `level` | string | 可选日志级别过滤条件。 |
+| `search` | string | 可选日志内容过滤条件，对 `line` 内容做大小写不敏感的包含匹配；设置后响应中会回显 `search` 字段，便于客户端识别后端是否支持。 |
 | `after` | integer 或 RFC3339 | 可选 timestamp 下界。 |
 | `before` | integer 或 RFC3339 | 可选 timestamp 上界。 |
 | `limit` | integer | 最大返回记录数；默认 `100`，最大 `1000`。 |

@@ -70,11 +70,13 @@ func (h *Handler) GetLogs(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
+	search := firstNonEmptyQuery(c, "search")
 	result, errLogs := h.repo.ListAppLogs(ctx, cluster.AppLogQuery{
 		HomeIP:    firstNonEmptyQuery(c, "home_ip", "home-ip"),
 		ClientIP:  firstNonEmptyQuery(c, "client_ip", "client-ip"),
 		RequestID: firstNonEmptyQuery(c, "request_id", "request-id"),
 		Level:     strings.TrimSpace(c.Query("level")),
+		Search:    search,
 		After:     after,
 		Before:    before,
 		Limit:     limit,
@@ -89,12 +91,16 @@ func (h *Handler) GetLogs(c *gin.Context) {
 	for _, record := range result.Records {
 		items = append(items, appLogRecordToMap(&record))
 	}
-	c.JSON(http.StatusOK, gin.H{
+	payload := gin.H{
 		"logs":   items,
 		"total":  result.Total,
 		"limit":  limit,
 		"offset": offset,
-	})
+	}
+	if search != "" {
+		payload["search"] = search
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 // DeleteLogs deletes all app log records stored in the shared database.
