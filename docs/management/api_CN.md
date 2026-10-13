@@ -1525,6 +1525,8 @@ Query 参数：
 
 扣款查询的 `input_tokens` 与 `output_tokens` 使用读取时归一化的展示口径：关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时，输入包含未缓存输入、缓存读取与缓存写入，输出包含普通输出与推理 Token；尚未回填、非完整或缺失 usage 的记录保留扣款快照原值。此转换不改写数据库，不改变扣款金额、价格快照、余额或价格档位选择。 `/billing/overview` 的输入与输出合计按每条扣款使用相同规则求和；`cache_tokens` 保持不变。
 
+管理员扣款响应还包含 `cache_read_tokens` 与 `cache_write_tokens`：仅当关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时返回规范的缓存读取/写入桶（包含零值），否则为 `null`。任一值为 `null` 时，客户端应回退展示合并的 `cache_tokens`，而不是自行假设拆分。
+
 列出扣费记录，并返回管理员上下文。响应会暴露用户 ID、脱敏 API-key 元数据、价格快照、匹配的价格规则、request ID、endpoint，以及 `balance_before`/`balance_after`。计费扣费响应永不暴露原始 API key。
 
 查询参数：
@@ -1565,7 +1567,9 @@ Query 参数：
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
       "matched_price_rule": "openai:gpt-5.5:priority:272001",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "priority", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "request", "effective_service_tier": "priority", "response_tier_fallback": false }
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "priority", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "request", "effective_service_tier": "priority", "response_tier_fallback": false },
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
     }
   ],
   "total": 1,
