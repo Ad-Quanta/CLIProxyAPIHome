@@ -104,6 +104,133 @@ func TestManagementRecordTokensUseCompleteAccountingTotals(t *testing.T) {
 	}
 }
 
+type tokenBreakdownCase struct {
+	name, provider, tokens string
+	quality                string
+	total                  float64
+	inputTotal, uncached   float64
+	cacheRead, cacheWrite  float64
+	outputTotal            float64
+	nonReasoning           float64
+	reasoning              float64
+	unclassified           float64
+}
+
+func TestRequestEventsExposeTokenBreakdown(t *testing.T) {
+	ctx := context.Background()
+	db, errOpen := cluster.OpenSQLite(ctx, filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatal(errOpen)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatal(errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sqlite db: %v", errClose)
+		}
+	}()
+	if errMigrate := cluster.AutoMigrate(db); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	repo := cluster.NewRepository(db)
+	handler := NewHandler(repo, nil, "192.0.2.10", 0)
+
+	cases := []tokenBreakdownCase{
+		{
+			name: "claude", provider: "claude",
+			tokens:       `"input_tokens":2,"output_tokens":2070,"cache_read_tokens":10000,"cache_creation_tokens":926,"total_tokens":12998`,
+			quality:      "complete",
+			total:        12998,
+			inputTotal:   10928,
+			uncached:     2,
+			cacheRead:    10000,
+			cacheWrite:   926,
+			outputTotal:  2070,
+			nonReasoning: 2070,
+		},
+		{
+			name: "inconsistent", provider: "gemini",
+			tokens:       `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":999`,
+			quality:      "inconsistent",
+			total:        999,
+			unclassified: 999,
+		},
+	}
+	usageIDs := make(map[string]string, len(cases))
+	for index, tc := range cases {
+		payload := fmt.Sprintf(`{"timestamp":"2026-06-10T12:00:%02dZ","provider":%q,"model":"display-model","request_id":%q,"endpoint":"/v1/responses","tokens":{%s}}`, index, tc.provider, tc.name, tc.tokens)
+		record, errAppend := repo.AppendUsage(ctx, payload, "192.0.2.10")
+		if errAppend != nil {
+			t.Fatalf("%s: %v", tc.name, errAppend)
+		}
+		usageIDs[tc.name] = fmt.Sprint(record.ID)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/request-events", handler.ListRequestEvents)
+	engine.GET("/request-events/:id", handler.GetRequestEvent)
+
+	var list struct {
+		Items []struct {
+			RequestID      string         `json:"request_id"`
+			TokenBreakdown map[string]any `json:"token_breakdown"`
+		} `json:"items"`
+	}
+	serveRequestEventJSON(t, engine, "/request-events?limit=10", &list)
+	listBreakdowns := make(map[string]map[string]any, len(list.Items))
+	for _, item := range list.Items {
+		listBreakdowns[item.RequestID] = item.TokenBreakdown
+	}
+
+	for _, tc := range cases {
+		var detail struct {
+			Event struct {
+				TokenBreakdown map[string]any `json:"token_breakdown"`
+			} `json:"event"`
+		}
+		serveRequestEventJSON(t, engine, "/request-events/evt_"+usageIDs[tc.name], &detail)
+		for source, breakdown := range map[string]map[string]any{
+			"list":   listBreakdowns[tc.name],
+			"detail": detail.Event.TokenBreakdown,
+		} {
+			assertTokenBreakdown(t, tc.name, source, breakdown, tc)
+		}
+	}
+}
+
+func assertTokenBreakdown(t *testing.T, name, source string, breakdown map[string]any, tc tokenBreakdownCase) {
+	t.Helper()
+	if breakdown == nil {
+		t.Fatalf("%s %s token_breakdown missing", name, source)
+	}
+	input, _ := breakdown["input"].(map[string]any)
+	output, _ := breakdown["output"].(map[string]any)
+	if input == nil || output == nil {
+		t.Fatalf("%s %s token_breakdown = %#v", name, source, breakdown)
+	}
+	checks := map[string]struct{ got, want any }{
+		"schema_version":              {breakdown["schema_version"], float64(2)},
+		"quality":                     {breakdown["quality"], tc.quality},
+		"total_tokens":                {breakdown["total_tokens"], tc.total},
+		"input.total_tokens":          {input["total_tokens"], tc.inputTotal},
+		"input.uncached_tokens":       {input["uncached_tokens"], tc.uncached},
+		"input.cache_read_tokens":     {input["cache_read_tokens"], tc.cacheRead},
+		"input.cache_write_tokens":    {input["cache_write_tokens"], tc.cacheWrite},
+		"output.total_tokens":         {output["total_tokens"], tc.outputTotal},
+		"output.non_reasoning_tokens": {output["non_reasoning_tokens"], tc.nonReasoning},
+		"output.reasoning_tokens":     {output["reasoning_tokens"], tc.reasoning},
+		"unclassified_tokens":         {breakdown["unclassified_tokens"], tc.unclassified},
+	}
+	for field, check := range checks {
+		if check.got != check.want {
+			t.Errorf("%s %s token_breakdown.%s = %#v, want %#v", name, source, field, check.got, check.want)
+		}
+	}
+}
+
 func listTokensByRequestID(t *testing.T, engine *gin.Engine, path string) map[string]map[string]any {
 	t.Helper()
 	var list struct {
