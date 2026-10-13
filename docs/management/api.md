@@ -3030,6 +3030,8 @@ These endpoints read persisted `usage`, `billing_charge`, `api_key`, `user`, and
 
 Canonical token accounting is available only when `capabilities.usage_token_breakdown_v2=true`. Clients must read that declared capability and must not infer support by probing a usage route or rebuilding a breakdown from the legacy token counters. While the capability is `false`, the server may already return `token_breakdown` objects for newly normalized rows, but the selected range can still contain historical rows awaiting backfill. The legacy `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, `cache_read_tokens`, `cache_creation_tokens`, and `total_tokens` fields remain available for diagnostics and backward compatibility; they are not mutually exclusive and must not be stacked into a total.
 
+`input_tokens` and `output_tokens` use one display rule across `/usage/overview` (`totals`, `trend[]`, `model_efficiency[]`, and `top`), `/usage/records`, `/usage/records/:id`, `/usage/export`, `/usage/aggregates`, `/usage/realtime` (`current_usage[]`), `/usage/session-tree`, and the `/request-events` list, detail, and export APIs. The rule matches `/billing/charges` and `/billing/overview`. When a usage row has v2 token accounting with `complete` quality, `input_tokens` includes uncached input, cache reads, and cache writes, and `output_tokens` includes non-reasoning and reasoning output. Pending backfills and `unclassified` or `inconsistent` rows keep the original counters. Aggregates sum this per-row value. `reasoning_tokens`, `cached_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `total_tokens`, `token_breakdown`, and `performance.tps` are unchanged. This read-time conversion does not rewrite stored usage rows.
+
 When enabled, `totals`, every `trend[]` bucket, every usage record, and every aggregate item include this schema:
 
 ```json
@@ -3166,7 +3168,7 @@ Query parameters:
 | --- | --- | --- | --- |
 | `session_id` / `root_session_id` / `request_id` / `id` | string | none | The identifier to look up (supports raw names, prefixed IDs, or canonical UUIDv8). If a `request_id`, `id`, or subagent `session_id` is supplied, the endpoint resolves the root session and returns the full hierarchy. |
 
-The response contains `root_session_id`, `total_sessions`, `total_requests`, `total_tokens`, and `tree[]`. Each tree node includes aggregated token metrics, first/last seen timestamps, failure counts, optional subagent node metadata (`node_kind`, `is_fork`, `is_compaction`), child sessions (`children[]`), and request turns (`timeline[]`).
+The response contains `root_session_id`, `total_sessions`, `total_requests`, `total_tokens`, and `tree[]`. Each tree node includes aggregated token metrics (`input_tokens` and `output_tokens` follow the usage display rule), first/last seen timestamps, failure counts, optional subagent node metadata (`node_kind`, `is_fork`, `is_compaction`), child sessions (`children[]`), and request turns (`timeline[]`).
 
 ### GET `/usage/aggregates`
 
@@ -3237,7 +3239,7 @@ The response contains `items`, `total`, `limit`, `offset`, and `sort`. `items[]`
 | `credential` | object | Execution credential type, ID, auth index, provider, label, source, and redacted `api_key_preview`. |
 | `client` | object | User, client key ID/label, redacted `client_key_masked`, and caller client IP. |
 | `error` | object | Redacted error status, upstream status, reason, message, and body preview. |
-| `tokens` / `performance` / `billing` | object | Token, latency/TTFT/TPS, and billing metadata. |
+| `tokens` / `performance` / `billing` | object | Token, latency/TTFT/TPS, and billing metadata. `tokens.input_tokens` and `tokens.output_tokens` follow the usage display rule in Usage Observability Conventions; list, detail, and export responses use the same values. |
 | `related.request_log` | object | Request log link metadata, including `home_ip` and `home_port` when available. Local availability is checked against the filesystem. For a remote Home, `available=true` and `download_url` mean cluster forwarding is configured and the download can be attempted. |
 
 ### GET `/request-events/filter-options`
