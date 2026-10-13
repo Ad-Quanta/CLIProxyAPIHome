@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
 func TestBillingDisplayTokensDoNotChangeLedger(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -37,15 +41,16 @@ func TestBillingDisplayTokensDoNotChangeLedger(t *testing.T) {
 	cases := []struct {
 		name, provider, tokens, state string
 		input, output                 int64
+		cacheRead, cacheWrite         *int64
 	}{
-		{"gemini", "gemini", `"input_tokens":61070,"output_tokens":50,"reasoning_tokens":139,"total_tokens":61259`, "", 61070, 189},
-		{"claude", "claude", `"input_tokens":2,"output_tokens":2070,"cache_read_tokens":10000,"cache_creation_tokens":926,"total_tokens":12998`, "", 10928, 2070},
-		{"openai", "openai", `"input_tokens":87384,"output_tokens":204,"reasoning_tokens":100,"cache_read_tokens":84992,"total_tokens":87588`, "", 87384, 204},
-		{"inconsistent", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":999`, "", 100, 20},
-		{"unclassified", "unknown", `"input_tokens":100,"output_tokens":20,"total_tokens":120`, "", 100, 20},
-		{"pending", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "pending", 100, 20},
-		{"missing", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "missing", 100, 20},
-		{"canonical-zero", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "zero", 0, 0},
+		{"gemini", "gemini", `"input_tokens":61070,"output_tokens":50,"reasoning_tokens":139,"total_tokens":61259`, "", 61070, 189, int64Ptr(0), int64Ptr(0)},
+		{"claude", "claude", `"input_tokens":2,"output_tokens":2070,"cache_read_tokens":10000,"cache_creation_tokens":926,"total_tokens":12998`, "", 10928, 2070, int64Ptr(10000), int64Ptr(926)},
+		{"openai", "openai", `"input_tokens":87384,"output_tokens":204,"reasoning_tokens":100,"cache_read_tokens":84992,"total_tokens":87588`, "", 87384, 204, int64Ptr(84992), int64Ptr(0)},
+		{"inconsistent", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":999`, "", 100, 20, nil, nil},
+		{"unclassified", "unknown", `"input_tokens":100,"output_tokens":20,"total_tokens":120`, "", 100, 20, nil, nil},
+		{"pending", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "pending", 100, 20, nil, nil},
+		{"missing", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "missing", 100, 20, nil, nil},
+		{"canonical-zero", "gemini", `"input_tokens":100,"output_tokens":20,"reasoning_tokens":10,"total_tokens":130`, "zero", 0, 0, int64Ptr(0), int64Ptr(0)},
 	}
 	var wantInput, wantOutput int64
 	for _, tc := range cases {
@@ -108,8 +113,12 @@ func TestBillingDisplayTokensDoNotChangeLedger(t *testing.T) {
 			if row.InputTokens != tc.input || row.OutputTokens != tc.output {
 				t.Fatalf("%s display = %d/%d, want %d/%d", tc.name, row.InputTokens, row.OutputTokens, tc.input, tc.output)
 			}
+			if !reflect.DeepEqual(row.CacheReadTokens, tc.cacheRead) || !reflect.DeepEqual(row.CacheWriteTokens, tc.cacheWrite) {
+				t.Fatalf("%s cache split = %v/%v, want %v/%v", tc.name, row.CacheReadTokens, row.CacheWriteTokens, tc.cacheRead, tc.cacheWrite)
+			}
 			original := stored[tc.name]
 			row.InputTokens, row.OutputTokens = original.InputTokens, original.OutputTokens
+			row.CacheReadTokens, row.CacheWriteTokens = original.CacheReadTokens, original.CacheWriteTokens
 			if !reflect.DeepEqual(row, original) {
 				t.Fatalf("%s changed non-display fields", tc.name)
 			}
