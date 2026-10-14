@@ -4032,6 +4032,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `user-email.reset-token-ttl` | string | Positive Go duration for password-reset tokens. |
 | `oauth.auth-dir` | string | Import/export auth directory; not a Home runtime storage backend. |
 | `requests.proxy-url` | string | Global outbound proxy URL. |
+| `requests.tls-handshake-timeout-seconds` | integer | Bounds upstream TLS handshakes made by CPA's shared uTLS client in seconds. Applies to both the Claude Code Anthropic transport and the Chrome ChatGPT/Codex transport; starts after TCP/proxy connection establishment and does not bound dialing or proxy CONNECT. Default `0` disables it. |
 | `multimedia.disable-image-generation` | boolean or `"chat"` / `"passthrough"` | `false` enables image generation; `true` disables it globally; `"chat"` disables image generation on non-image endpoints; `"passthrough"` neither injects nor strips `image_generation` there, while keeping dedicated image endpoints enabled. |
 | `routing.force-model-prefix` | boolean | Requires explicit model prefixes for prefixed credentials. |
 | `observability.logs.request-log` | boolean | Enables detailed request logging. |
@@ -4269,6 +4270,7 @@ Each row names a legacy config field/root and its canonical v8 tree location. JS
 | `save-cooldown-status` | `routing.cooldown.save-cooldown-status` |
 | `transient-error-cooldown-seconds` | `routing.cooldown.transient-error-cooldown-seconds` |
 | `proxy-url` | `requests.proxy-url` |
+| `tls-handshake-timeout-seconds` | `requests.tls-handshake-timeout-seconds` |
 | `passthrough-headers` | `requests.passthrough-headers` |
 | `nonstream-keepalive-interval` | `requests.nonstream-keepalive-interval` |
 | `streaming` | `requests.streaming` |

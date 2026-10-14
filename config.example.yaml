@@ -207,6 +207,13 @@ requests:
   # Per-entry proxy-url also supports "direct" or "none" to bypass both the global proxy-url and environment proxies explicitly.
   proxy-url: ""
 
+  # Maximum time, in seconds, for upstream TLS handshakes made by CPA's shared uTLS
+  # client. Home stores and forwards this CPA option. It applies to both the Claude Code
+  # Anthropic transport and the Chrome ChatGPT/Codex transport. The timer starts after
+  # TCP or proxy connection establishment returns; it does not bound dialing or proxy
+  # CONNECT and is lifted once the handshake succeeds. Set to 0 to disable (default).
+  # tls-handshake-timeout-seconds: 0
+
   # When true, forward filtered upstream response headers to downstream clients.
   # Default is false (disabled).
   passthrough-headers: false

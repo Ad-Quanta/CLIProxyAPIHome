@@ -4030,6 +4030,7 @@ Query 参数：
 | `user-email.reset-token-ttl` | string | 密码重置 token 的正数 Go duration。 |
 | `oauth.auth-dir` | string | 凭证导入导出目录，不是 Home 运行时存储后端。 |
 | `requests.proxy-url` | string | 全局出站代理 URL。 |
+| `requests.tls-handshake-timeout-seconds` | integer | 以秒为单位限制 CPA 共享 uTLS 客户端的上游 TLS 握手。同时作用于 Claude Code Anthropic 传输和 Chrome ChatGPT/Codex 传输；计时从 TCP/代理连接建立返回后开始，不限制拨号或代理 CONNECT。默认 `0` 表示禁用。 |
 | `multimedia.disable-image-generation` | boolean or `"chat"` / `"passthrough"` | `false` 启用图像生成；`true` 全局禁用；`"chat"` 在非图像接口禁用图像生成；`"passthrough"` 不注入也不移除这些接口的 `image_generation`，并保留专用图像接口。 |
 | `routing.force-model-prefix` | boolean | 对带 prefix 的凭证要求显式模型 prefix。 |
 | `observability.logs.request-log` | boolean | 启用详细 request logging。 |
@@ -4267,6 +4268,7 @@ v0 回调是需要管理认证的 POST；v8 额外支持 GET，并通过 state �
 | `save-cooldown-status` | `routing.cooldown.save-cooldown-status` |
 | `transient-error-cooldown-seconds` | `routing.cooldown.transient-error-cooldown-seconds` |
 | `proxy-url` | `requests.proxy-url` |
+| `tls-handshake-timeout-seconds` | `requests.tls-handshake-timeout-seconds` |
 | `passthrough-headers` | `requests.passthrough-headers` |
 | `nonstream-keepalive-interval` | `requests.nonstream-keepalive-interval` |
 | `streaming` | `requests.streaming` |
