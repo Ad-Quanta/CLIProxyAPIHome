@@ -785,6 +785,7 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 		Status:                item.Status,
 		Disabled:              item.Disabled,
 		Unavailable:           item.Unavailable,
+		RuntimeProjection:     true,
 		RuntimeRefreshBlocked: item.RefreshBlocked,
 		NextRetryAfter:        item.NextRetryAfter,
 		Quota:                 item.Quota,
