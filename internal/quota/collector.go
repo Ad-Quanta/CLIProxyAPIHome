@@ -336,7 +336,7 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth, 
 	input := cluster.QuotaSnapshotWrite{
 		CredentialID: auth.ID, QuotaStatus: status, CollectionStatus: collectionStatus, Source: "active_probe",
 		ObservedAt: &observedAt, MaxAcceptedObservedAt: &observedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
-		NextProbeAt: &expiresAt, ConsecutiveFailure: 0, Error: result.collectionError, Plan: result.plan, ReplacePlan: true, ParserVersion: snapshotVersion, CollectorVersion: snapshotVersion,
+		NextProbeAt: &expiresAt, ConsecutiveFailure: 0, Error: result.collectionError, Plan: result.plan, ReplacePlan: result.replacePlan, ParserVersion: snapshotVersion, CollectorVersion: snapshotVersion,
 		ResetCredits: result.resetCredits, ReplaceResetCredits: result.replaceResetCredits,
 		ExpectedProbeOwner: c.options.Owner, ClearProbeLease: true, ReplaceWindows: result.replaceWindows, Windows: result.windows,
 	}
@@ -370,6 +370,7 @@ type probeResult struct {
 	resetCredits        *cluster.QuotaResetCredits
 	partial             bool
 	replaceWindows      bool
+	replacePlan         bool
 	replaceResetCredits bool
 	collectionError     *cluster.QuotaCollectionError
 }
@@ -382,13 +383,12 @@ func (c *Collector) probeCredential(ctx context.Context, auth *coreauth.Auth) (p
 		return c.probeClaude(ctx, auth)
 	case "antigravity":
 		windows, errProbe := c.probeAntigravity(ctx, auth)
-		return probeResult{windows: windows, replaceWindows: true}, errProbe
+		return probeResult{windows: windows, replaceWindows: true, replacePlan: true}, errProbe
 	case "kimi":
 		windows, errProbe := c.probeKimi(ctx, auth)
-		return probeResult{windows: windows, replaceWindows: true}, errProbe
+		return probeResult{windows: windows, replaceWindows: true, replacePlan: true}, errProbe
 	case "xai":
-		windows, plan, errProbe := c.probeXAI(ctx, auth)
-		return probeResult{windows: windows, plan: plan, replaceWindows: true}, errProbe
+		return c.probeXAI(ctx, auth)
 	default:
 		return probeResult{}, &probeError{code: "PROVIDER_UNSUPPORTED", message: "Credential provider does not have a quota collector.", retryable: false}
 	}
@@ -416,6 +416,7 @@ func (c *Collector) probeCodex(ctx context.Context, auth *coreauth.Auth) (probeR
 		plan:                usage.plan,
 		resetCredits:        codexResetCreditsCountFallback(usage.resetCreditsAvailableCount, observedAt),
 		replaceWindows:      true,
+		replacePlan:         true,
 		replaceResetCredits: true,
 	}
 	resetHeaders := headers.Clone()
