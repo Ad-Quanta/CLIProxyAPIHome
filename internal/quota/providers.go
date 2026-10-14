@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -100,12 +101,30 @@ func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) ([]cluste
 	if userID := quotaMetadataString(auth.Metadata, "sub", "subject", "user_id", "userId"); userID != "" {
 		headers.Set("x-userid", userID)
 	}
-	payload, _, errRequest := c.probeRequest(ctx, auth, http.MethodGet, c.options.XAIBillingURL, nil, headers)
-	if errRequest != nil {
-		return nil, nil, errRequest
+	now := c.options.Now().UTC()
+	var windows []cluster.QuotaWindow
+	var plan *cluster.QuotaPlan
+	monthlyPayload, _, errMonthly := c.probeRequest(ctx, auth, http.MethodGet, c.options.XAIBillingURL, nil, headers)
+	if errMonthly == nil {
+		monthlyWindows, monthlyPlan, errParse := parseXAIUsageWindows(monthlyPayload, now)
+		if errParse != nil {
+			return nil, nil, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
+		}
+		windows, plan = monthlyWindows, monthlyPlan
 	}
-	windows, plan, errParse := parseXAIUsageWindows(payload, c.options.Now().UTC())
-	if errParse != nil || len(windows) == 0 {
+	// The weekly credits quota lives behind the format=credits billing variant
+	// and is the primary limit for subscription accounts; a weekly probe failure
+	// is non-fatal while the monthly response still yields usable windows.
+	weeklyPayload, _, errWeekly := c.probeRequest(ctx, auth, http.MethodGet, xaiWeeklyBillingURL(c.options.XAIBillingURL), nil, headers)
+	if errWeekly == nil {
+		if weeklyWindow, ok := parseXAIWeeklyWindow(weeklyPayload, now); ok {
+			windows = append([]cluster.QuotaWindow{weeklyWindow}, windows...)
+		}
+	}
+	if len(windows) == 0 {
+		if errMonthly != nil {
+			return nil, nil, errMonthly
+		}
 		return nil, nil, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
 	}
 	return windows, plan, nil
@@ -551,16 +570,26 @@ type xaiBillingPayload struct {
 	Config *xaiBillingConfig `json:"config"`
 }
 
+type xaiBillingPeriod struct {
+	Type  string `json:"type"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
 type xaiBillingConfig struct {
-	MonthlyLimit      flexFloat `json:"monthlyLimit"`
-	MonthlyLimitSnake flexFloat `json:"monthly_limit"`
-	Used              flexFloat `json:"used"`
-	OnDemandCap       flexFloat `json:"onDemandCap"`
-	OnDemandCapSnake  flexFloat `json:"on_demand_cap"`
-	OnDemandUsed      flexFloat `json:"onDemandUsed"`
-	OnDemandUsedSnake flexFloat `json:"on_demand_used"`
-	BillingPeriodEnd  string    `json:"billingPeriodEnd"`
-	BillingEndSnake   string    `json:"billing_period_end"`
+	MonthlyLimit            flexFloat         `json:"monthlyLimit"`
+	MonthlyLimitSnake       flexFloat         `json:"monthly_limit"`
+	Used                    flexFloat         `json:"used"`
+	OnDemandCap             flexFloat         `json:"onDemandCap"`
+	OnDemandCapSnake        flexFloat         `json:"on_demand_cap"`
+	OnDemandUsed            flexFloat         `json:"onDemandUsed"`
+	OnDemandUsedSnake       flexFloat         `json:"on_demand_used"`
+	BillingPeriodEnd        string            `json:"billingPeriodEnd"`
+	BillingEndSnake         string            `json:"billing_period_end"`
+	CreditUsagePercent      flexFloat         `json:"creditUsagePercent"`
+	CreditUsagePercentSnake flexFloat         `json:"credit_usage_percent"`
+	CurrentPeriod           *xaiBillingPeriod `json:"currentPeriod"`
+	CurrentPeriodSnake      *xaiBillingPeriod `json:"current_period"`
 }
 
 const (
@@ -598,7 +627,9 @@ func parseXAIUsageWindows(body []byte, observedAt time.Time) ([]cluster.QuotaWin
 	billingPeriodEnd := firstNonEmptyString(config.BillingPeriodEnd, config.BillingEndSnake)
 
 	windows := make([]cluster.QuotaWindow, 0, 2)
-	if monthlyLimitCents != nil {
+	// A zero monthly limit carries no quota information and would normalize to
+	// an exhausted 0/0 window, so weekly-credits-only accounts skip it entirely.
+	if monthlyLimitCents != nil && *monthlyLimitCents > 0 {
 		limit := math.Max(0, *monthlyLimitCents/100)
 		var used *float64
 		if usedCents != nil {
@@ -632,6 +663,55 @@ func parseXAIUsageWindows(body []byte, observedAt time.Time) ([]cluster.QuotaWin
 	}
 
 	return windows, xaiPlanFromMonthlyLimit(monthlyLimitCents), nil
+}
+
+// xaiWeeklyBillingURL derives the weekly credits variant of the xAI billing
+// endpoint, which reports the shared weekly limit instead of monthly spend.
+func xaiWeeklyBillingURL(monthlyURL string) string {
+	parsed, errParse := url.Parse(monthlyURL)
+	if errParse != nil {
+		return monthlyURL
+	}
+	query := parsed.Query()
+	query.Set("format", "credits")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+// parseXAIWeeklyWindow maps the format=credits billing payload to the weekly
+// quota window. The weekly variant reports usage as a percent of the shared
+// weekly limit rather than a currency amount, so the window uses a 0-100 scale.
+func parseXAIWeeklyWindow(body []byte, observedAt time.Time) (cluster.QuotaWindow, bool) {
+	var payload xaiBillingPayload
+	if errDecode := json.Unmarshal(body, &payload); errDecode != nil {
+		return cluster.QuotaWindow{}, false
+	}
+	config := payload.Config
+	if config == nil {
+		return cluster.QuotaWindow{}, false
+	}
+	usedPercent := firstFloat(flexFloatValue(config.CreditUsagePercent), flexFloatValue(config.CreditUsagePercentSnake))
+	period := config.CurrentPeriod
+	if period == nil {
+		period = config.CurrentPeriodSnake
+	}
+	if usedPercent == nil {
+		return cluster.QuotaWindow{}, false
+	}
+	if period != nil && strings.Contains(strings.ToLower(period.Type), "monthly") {
+		return cluster.QuotaWindow{}, false
+	}
+	used := math.Max(0, math.Min(100, *usedPercent))
+	limit := 100.0
+	window := cluster.QuotaWindow{ID: "xai-weekly-usage", Label: quotaStringPtr("Weekly Limit"), Scope: "account", Mode: "fixed", Status: "unknown", Unit: "percentage", Used: &used, Limit: &limit, PeriodUnit: "week", PeriodValue: quotaFloatPtr(1), Source: "active_probe", ObservedAt: observedAt, Priority: -10}
+	if period != nil {
+		window.ResetAt = parseProviderTime(period.End)
+	}
+	if window.ResetAt == nil {
+		window.ResetAt = parseProviderTime(firstNonEmptyString(config.BillingPeriodEnd, config.BillingEndSnake))
+	}
+	normalizeWindowValues(&window)
+	return window, true
 }
 
 func normalizedProviderRatio(value float64) float64 {
