@@ -27,7 +27,7 @@ func (c *Collector) probeClaude(ctx context.Context, auth *coreauth.Auth) (probe
 	if errParse != nil || len(windows) == 0 {
 		return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "Claude quota response did not contain usable windows.", retryable: true}
 	}
-	result := probeResult{windows: windows, replaceWindows: true}
+	result := probeResult{windows: windows, replaceWindows: true, replacePlan: true}
 	profileBody, _, errProfile := c.probeRequest(ctx, auth, http.MethodGet, c.options.ClaudeProfileURL, nil, headers)
 	if errProfile != nil {
 		result.partial = true
@@ -91,7 +91,7 @@ func (c *Collector) probeKimi(ctx context.Context, auth *coreauth.Auth) ([]clust
 	return windows, nil
 }
 
-func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) ([]cluster.QuotaWindow, *cluster.QuotaPlan, *probeError) {
+func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) (probeResult, *probeError) {
 	headers := http.Header{
 		"Accept":               []string{"*/*"},
 		"User-Agent":           []string{xaiGrokUserAgent},
@@ -108,7 +108,7 @@ func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) ([]cluste
 	if errMonthly == nil {
 		monthlyWindows, monthlyPlan, errParse := parseXAIUsageWindows(monthlyPayload, now)
 		if errParse != nil {
-			return nil, nil, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
+			return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
 		}
 		windows, plan = monthlyWindows, monthlyPlan
 	}
@@ -123,11 +123,23 @@ func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) ([]cluste
 	}
 	if len(windows) == 0 {
 		if errMonthly != nil {
-			return nil, nil, errMonthly
+			return probeResult{}, errMonthly
 		}
-		return nil, nil, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
+		if errWeekly != nil {
+			return probeResult{}, errWeekly
+		}
+		return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "xAI billing response did not contain usable quota.", retryable: true}
 	}
-	return windows, plan, nil
+	result := probeResult{windows: windows, plan: plan, replaceWindows: true, replacePlan: true}
+	if errMonthly != nil {
+		// The weekly window alone cannot re-derive the subscription plan, so a
+		// monthly outage downgrades the collection to partial and keeps the
+		// previously stored plan instead of clearing it.
+		result.partial = true
+		result.collectionError = probeCollectionError(errMonthly, now)
+		result.replacePlan = false
+	}
+	return result, nil
 }
 
 func probeCollectionError(failure *probeError, occurredAt time.Time) *cluster.QuotaCollectionError {

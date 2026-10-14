@@ -298,3 +298,74 @@ func TestCollectorToleratesXAIWeeklyProbeFailure(t *testing.T) {
 		t.Fatalf("plan lost after weekly probe failure: %+v", item.Plan)
 	}
 }
+
+func TestCollectorReportsXAIWeeklyProbeErrorWhenMonthlyYieldsNoWindows(t *testing.T) {
+	repo := newCollectorTestRepository(t)
+	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	seedCollectorProviderAuth(t, repo, "xai-weekly-error", "xai", map[string]any{"type": "xai", "access_token": "xai-secret"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("format") == "credits" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"config":{"monthlyLimit":0,"used":0,"onDemandCap":0}}`))
+	}))
+	defer server.Close()
+
+	collector := NewCollector(repo, Options{Owner: "home-a", XAIBillingURL: server.URL, Now: func() time.Time { return now }})
+	collector.collect(context.Background())
+
+	item, errGet := repo.GetQuotaCredential(context.Background(), "xai-weekly-error", now.Add(time.Minute))
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.CollectionStatus != "failed" || item.Error == nil || item.Error.Code != "UPSTREAM_UNAVAILABLE" {
+		t.Fatalf("weekly probe failure must surface the upstream error, got status=%q error=%+v", item.CollectionStatus, item.Error)
+	}
+}
+
+func TestCollectorKeepsXAIPlanWhenMonthlyProbeFails(t *testing.T) {
+	repo := newCollectorTestRepository(t)
+	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	seedCollectorProviderAuth(t, repo, "xai-monthly-fail", "xai", map[string]any{"type": "xai", "access_token": "xai-secret"})
+	var monthlyRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("format") == "credits" {
+			_, _ = w.Write([]byte(`{"config":{"creditUsagePercent":16,"currentPeriod":{"type":"weekly","end":"2026-07-16T20:46:00Z"}}}`))
+			return
+		}
+		if monthlyRequests.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"config":{"monthlyLimit":15000,"used":4200,"billingPeriodEnd":"2026-08-01T00:00:00Z"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	collector := NewCollector(repo, Options{Owner: "home-a", XAIBillingURL: server.URL, Now: func() time.Time { return now }})
+	collector.collect(context.Background())
+	first, errFirst := repo.GetQuotaCredential(context.Background(), "xai-monthly-fail", now)
+	if errFirst != nil || first.Plan == nil || first.Plan.Name != "SuperGrok" {
+		t.Fatalf("initial plan = %+v, error = %v", first, errFirst)
+	}
+
+	now = now.Add(31 * time.Minute)
+	accepted, errTrigger := collector.TriggerCollection(context.Background(), map[string]struct{}{"xai-monthly-fail": {}}, nil)
+	if errTrigger != nil || accepted != 1 {
+		t.Fatalf("TriggerCollection() = %d, %v, want 1, nil", accepted, errTrigger)
+	}
+	collector.Wait()
+	second, errSecond := repo.GetQuotaCredential(context.Background(), "xai-monthly-fail", now)
+	if errSecond != nil {
+		t.Fatalf("GetQuotaCredential() after monthly outage error = %v", errSecond)
+	}
+	if second.CollectionStatus != "partial" || second.Error == nil || second.Error.Code != "UPSTREAM_UNAVAILABLE" {
+		t.Fatalf("monthly outage must mark the collection partial, got status=%q error=%+v", second.CollectionStatus, second.Error)
+	}
+	if second.Plan == nil || second.Plan.Name != "SuperGrok" {
+		t.Fatalf("stored plan cleared by a monthly outage: %+v", second.Plan)
+	}
+	if len(second.Windows) != 1 || second.Windows[0].ID != "xai-weekly-usage" {
+		t.Fatalf("weekly window lost after monthly outage: %+v", second.Windows)
+	}
+}
