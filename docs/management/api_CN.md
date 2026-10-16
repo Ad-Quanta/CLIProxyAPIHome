@@ -353,6 +353,14 @@ JSON 写入仅在新旧 ICE server 的 `urls` 列表内容和顺序相同时保�
 
 Home 将 `observability.usage.usage-statistics-enabled` 规范化为 `true`，将 `oauth.providers.aistudio.ws-auth` 规范化为 `false`。`routing.cooldown.disable-cooling` 仍控制 Home 本地调度冷却，下发给 CPA 的配置独立强制关闭 CPA 本地冷却。`server.port` 配置的是 CPA，运行中的 CPA 需重启才重新绑定端口；Home 监听仍使用 `-addr` 或 `cluster.yaml` 的 `node.port`。`oauth.auth-dir` 仍是导入导出路径，不是运行时文件写入位置。
 
+### 模型目录来源
+
+`models` 子树持久化在数据库配置快照中，对应 `config` 表内键为 `models`、值为 JSON 对象的一行。可通过 Management API 设置，或使用 `-import` 从 `config.yaml` 导入；Home 在运行时从数据库读取。`config.yaml` 仅为导入/导出交换格式，单独修改文件不会更新运行中的 Home。
+
+`models` 配置子树支持 `catalog`、`codex-catalog` 和 `devin-catalog`。各字段必须为 HTTP(S) URL 或绝对本地文件路径；空值保留内嵌回退目录和官方远程刷新。目录每 3 小时及来源变更时刷新；刷新失败保留最后一次有效目录，自定义来源不会回退到官方 URL。
+
+Home 会加载全部三类目录，并将完整 `models` 子树下发给 CPA 节点，节点通过 `codex-catalog` 选择 Codex 客户端目录。Home 模式的 CPA 节点从 Home 获取通用及 Devin 模型列表，忽略节点自身的 `catalog` 和 `devin-catalog` 来源。通过现有 v8 配置或配置子树接口（例如 `/config/models`）修改这些字段。
+
 ### Payload 和 OAuth Provider 子树
 
 Payload 规则使用 `/config/requests/payload`，Antigravity OAuth 配置使用 `/config/oauth/providers/antigravity`。二者都遵循上述配置树规则：直接返回值、对象递归合并、数组整体替换、保留 `null`。

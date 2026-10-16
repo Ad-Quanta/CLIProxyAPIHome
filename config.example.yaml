@@ -10,6 +10,21 @@
 # Optional credentials and request rules stay commented until configured.
 config-version: 8
 
+# Optional model catalog sources: http(s) URLs or absolute local file paths.
+# Like the rest of this file, these values are imported into the database (-import)
+# or set through the Management API. Home reads the models config row from the
+# database at runtime; editing this exchange file alone does not change it.
+# Failed refreshes retain the last valid catalog; custom sources never fall back
+# to official URLs. Files and URLs are refreshed every 3 hours and on source changes.
+# catalog and devin-catalog apply to this Home process itself. The whole models
+# section is also distributed to CPA nodes, where codex-catalog selects each
+# node's Codex client catalog (CPA nodes in Home mode take their model lists
+# from Home and ignore catalog and devin-catalog).
+models:
+  catalog: ""
+  codex-catalog: ""
+  devin-catalog: ""
+
 # Listener, TLS, network discovery, and server operation. Home-only controls are noted inline.
 server:
   # Server host/interface to bind to. Default is empty ("") to bind all interfaces (IPv4 + IPv6).

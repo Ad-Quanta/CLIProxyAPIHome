@@ -214,6 +214,9 @@ func (cfg *Config) UnmarshalYAML(node *yaml.Node) error {
 	if err = root.Decode(&decoded); err != nil {
 		return err
 	}
+	if errValidate := decoded.Models.Validate(); errValidate != nil {
+		return errValidate
+	}
 	*cfg = Config(decoded)
 	if errValidate := cfg.ValidateCredentialWeights(); errValidate != nil {
 		return errValidate
@@ -489,7 +492,7 @@ func NormalizeConfigLayout(data []byte, migrate bool) ([]byte, bool, error) {
 }
 
 func v8AllowedRoots() map[string]bool {
-	allowed := map[string]bool{"config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "credential-concurrency-policies": true}
+	allowed := map[string]bool{"models": true, "config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "credential-concurrency-policies": true}
 	for _, path := range v8Paths {
 		section, _, _ := strings.Cut(path.current, ".")
 		allowed[section] = true
