@@ -77,7 +77,7 @@ func ApplyAuthExcludedModelsMeta(auth *coreauth.Auth, perKey []string, authKind 
 	if hash != "" {
 		auth.Attributes["excluded_models_hash"] = hash
 	}
-	// Store the combined excluded models list so that routing can read it at runtime
+	// Store only the credential's own rules so global config changes apply without rewriting credentials.
 	if len(combined) > 0 {
 		auth.Attributes["excluded_models"] = strings.Join(combined, ",")
 	}
