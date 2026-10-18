@@ -265,7 +265,7 @@ func TestImportLocalStateRejectsDuplicateProviderCredentialIDs(t *testing.T) {
 	}
 }
 
-func TestImportLocalStateRejectsInvalidAuthFileExcludedModels(t *testing.T) {
+func TestImportLocalStateKeepsAuthFilesWithInvalidExcludedModels(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
@@ -275,21 +275,28 @@ func TestImportLocalStateRejectsInvalidAuthFileExcludedModels(t *testing.T) {
 	}
 	writeFile(t, configPath, "gemini-api-key:\n  - api-key: gemini\n")
 	writeFile(t, filepath.Join(authDir, "a.json"), `{"type":"antigravity","email":"a@example.test"}`)
-	badPath := filepath.Join(authDir, "b.json")
-	writeFile(t, badPath, `{"type":"antigravity","email":"b@example.test","excluded_models":123}`)
+	writeFile(t, filepath.Join(authDir, "b.json"), `{"type":"antigravity","email":"b@example.test","excluded_models":123}`)
+	writeFile(t, filepath.Join(authDir, "c.json"), `{"type":"antigravity","email":"c@example.test","excluded_models":["Model-A",1]}`)
 	repo := NewRepository(openImportTestSQLite(t))
 
-	stats, errImport := ImportLocalState(ctx, ImportOptions{ConfigPath: configPath, AuthDir: authDir, Repository: repo})
-	if errImport == nil || !strings.Contains(errImport.Error(), badPath) {
-		t.Fatalf("ImportLocalState() = (%+v, %v), want error naming %s", stats, errImport, badPath)
+	// Imported files are existing credentials, so invalid rules must not abort the import.
+	if _, errImport := ImportLocalState(ctx, ImportOptions{ConfigPath: configPath, AuthDir: authDir, Repository: repo}); errImport != nil {
+		t.Fatalf("ImportLocalState() error = %v", errImport)
 	}
-	// Collection fails before the import transaction, so nothing from the batch is written.
 	auths, errList := repo.ListAuths(ctx)
 	if errList != nil {
 		t.Fatalf("ListAuths() error = %v", errList)
 	}
-	if len(auths) != 0 {
-		t.Fatalf("ListAuths() = %d auths, want none after a rejected import", len(auths))
+	got := make(map[string]string)
+	for _, auth := range auths {
+		if email, _ := auth.Metadata["email"].(string); email != "" {
+			got[email] = auth.Attributes["excluded_models"]
+		}
+	}
+	for email, want := range map[string]string{"a@example.test": "", "b@example.test": "", "c@example.test": "model-a"} {
+		if rules, ok := got[email]; !ok || rules != want {
+			t.Fatalf("%s imported = %t with rules %q, want imported with %q (all: %v)", email, ok, rules, want, got)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 )
 
 // FileSynthesizer generates Auth entries from OAuth JSON files.
@@ -53,7 +54,7 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 		}
 		auths, errSynthesize := synthesizeFileAuths(ctx, full, data)
 		if errSynthesize != nil {
-			return nil, errSynthesize
+			log.WithError(errSynthesize).Warnf("ignoring invalid excluded models in auth file %s", name)
 		}
 		if len(auths) == 0 {
 			continue
@@ -64,9 +65,9 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 }
 
 // SynthesizeAuthFile generates Auth entries for one auth JSON file payload.
-// It shares exactly the same mapping behavior as FileSynthesizer.Synthesize.
 // Unsupported payloads yield no auths and a nil error; a recognized credential
-// with an invalid excluded_models field yields an error naming the file.
+// with an invalid excluded_models field returns the auths built with the valid
+// rules together with an error naming the file.
 func SynthesizeAuthFile(ctx *SynthesisContext, fullPath string, data []byte) ([]*coreauth.Auth, error) {
 	return synthesizeFileAuths(ctx, fullPath, data)
 }
@@ -97,7 +98,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 			}
 			perAccountExcluded, errExcluded := ExtractExcludedModelsFromMetadata(metadata)
 			if errExcluded != nil {
-				return nil, fmt.Errorf("auth file %s: %w", fullPath, errExcluded)
+				errExcluded = fmt.Errorf("auth file %s: %w", fullPath, errExcluded)
 			}
 			for _, auth := range auths {
 				auth.CreatedAt = now
@@ -111,7 +112,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 				coreauth.ApplyCustomHeadersFromMetadata(auth)
 				applyClusterUUID(ctx, auth)
 			}
-			return auths, nil
+			return auths, errExcluded
 		}
 	}
 	if provider == "" {
@@ -162,7 +163,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	// Read per-account excluded models from the OAuth JSON file.
 	perAccountExcluded, errExcluded := ExtractExcludedModelsFromMetadata(metadata)
 	if errExcluded != nil {
-		return nil, fmt.Errorf("auth file %s: %w", fullPath, errExcluded)
+		errExcluded = fmt.Errorf("auth file %s: %w", fullPath, errExcluded)
 	}
 
 	a := &coreauth.Auth{
@@ -214,7 +215,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 		}
 	}
 	applyClusterUUID(ctx, a)
-	return []*coreauth.Auth{a}, nil
+	return []*coreauth.Auth{a}, errExcluded
 }
 
 func parsePluginFileAuths(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error) {
@@ -249,6 +250,8 @@ func compactPluginAuths(auths []*coreauth.Auth) []*coreauth.Auth {
 // Supports both "excluded_models" and "excluded-models" keys. The value must be a string array;
 // a single string is also accepted for older hand-written files and is split on commas, because
 // model IDs never contain commas. Any other type, or a non-string array element, is an error.
+// For non-string elements the valid string entries are still returned with the error, so
+// lenient readers can keep the usable rules while strict writers reject the value.
 func ExtractExcludedModelsFromMetadata(metadata map[string]any) ([]string, error) {
 	if metadata == nil {
 		return nil, nil
@@ -263,6 +266,7 @@ func ExtractExcludedModelsFromMetadata(metadata map[string]any) ([]string, error
 		return nil, nil
 	}
 	var stringSlice []string
+	var errInvalid error
 	switch v := raw.(type) {
 	case string:
 		stringSlice = strings.Split(v, ",")
@@ -273,7 +277,10 @@ func ExtractExcludedModelsFromMetadata(metadata map[string]any) ([]string, error
 		for index, item := range v {
 			s, okString := item.(string)
 			if !okString {
-				return nil, fmt.Errorf("metadata %s[%d] must be a string, got %T", key, index, item)
+				if errInvalid == nil {
+					errInvalid = fmt.Errorf("metadata %s[%d] must be a string, got %T", key, index, item)
+				}
+				continue
 			}
 			stringSlice = append(stringSlice, s)
 		}
@@ -286,5 +293,5 @@ func ExtractExcludedModelsFromMetadata(metadata map[string]any) ([]string, error
 			result = append(result, trimmed)
 		}
 	}
-	return result, nil
+	return result, errInvalid
 }

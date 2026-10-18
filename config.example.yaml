@@ -951,6 +951,11 @@ oauth:
   #       alias: "sample-latest"
 
   # OAuth provider excluded models
+  # Applies to OAuth/file-backed credentials of each provider.
+  # A credential's own non-empty "excluded_models" list (stored in its credential JSON) takes priority
+  # over these rules for that credential and is not merged with them. Credentials without their own
+  # list (missing, empty, or null) inherit the current rules here; changes to these rules
+  # take effect for them on config reload.
   # excluded-models:
   #   vertex:
   #     - "gemini-3-pro-preview"
