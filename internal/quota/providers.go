@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
@@ -140,6 +141,158 @@ func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) (probeRes
 		result.replacePlan = false
 	}
 	return result, nil
+}
+
+func (c *Collector) probeMeta(ctx context.Context, auth *coreauth.Auth) (probeResult, *probeError) {
+	dcaToken := metaDCAToken(auth)
+	if dcaToken == "" {
+		return probeResult{}, &probeError{code: "DCA_TOKEN_UNAVAILABLE", message: "Credential DCA token is unavailable.", retryable: false}
+	}
+	headers := http.Header{
+		"Accept":             []string{"application/json"},
+		"Content-Type":       []string{"application/json"},
+		"User-Agent":         []string{metaMuseUserAgent},
+		metaAPIVersionHeader: []string{metaAPIVersionValue},
+	}
+	payload, _, errRequest := c.probeRequestWithToken(ctx, auth, dcaToken, http.MethodPost, c.options.MetaQuotaURL, []byte("{}"), headers)
+	if errRequest != nil {
+		return probeResult{}, errRequest
+	}
+	windows, plan, errParse := parseMetaQuota(payload, c.options.Now().UTC())
+	if errParse != nil {
+		return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "Meta quota response could not be parsed.", retryable: true}
+	}
+	return probeResult{windows: windows, plan: plan, replaceWindows: true, replacePlan: true}, nil
+}
+
+func metaDCAToken(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	raw := quotaMetadataString(auth.Metadata, "dca_token", "dcaToken")
+	if !strings.HasPrefix(raw, "dca:") || len(raw) <= len("dca:") {
+		return ""
+	}
+	if strings.IndexFunc(raw, unicode.IsSpace) != -1 {
+		return ""
+	}
+	return raw
+}
+
+func parseMetaQuota(body []byte, observedAt time.Time) ([]cluster.QuotaWindow, *cluster.QuotaPlan, error) {
+	var decoded any
+	if errDecode := json.Unmarshal(body, &decoded); errDecode != nil {
+		return nil, nil, fmt.Errorf("decode meta quota response: %w", errDecode)
+	}
+	root, ok := decoded.(map[string]any)
+	if !ok || root == nil {
+		return nil, nil, fmt.Errorf("meta quota response is not a JSON object")
+	}
+	usage, _ := root["subs_usage"].(map[string]any)
+	explicitPlan, _ := root["subs_tier_name"].(string)
+	usagePlan := ""
+	if usage != nil {
+		usagePlan, _ = usage["tier"].(string)
+	}
+	var plan *cluster.QuotaPlan
+	if planName := firstNonEmptyString(explicitPlan, usagePlan); planName != "" {
+		plan = &cluster.QuotaPlan{Name: planName, Premium: false}
+	}
+
+	var windowRaw, weeklyRaw map[string]any
+	if usage != nil {
+		windowRaw, _ = usage["window"].(map[string]any)
+		weeklyRaw, _ = usage["weekly"].(map[string]any)
+	}
+
+	limit := 100.0
+	window := cluster.QuotaWindow{
+		ID:         "meta-window",
+		Label:      quotaStringPtr("Window"),
+		Scope:      "account",
+		Mode:       "rolling",
+		Status:     "unknown",
+		Unit:       "percentage",
+		Limit:      &limit,
+		PeriodUnit: "unknown",
+		Source:     "active_probe",
+		ObservedAt: observedAt,
+		Priority:   0,
+	}
+	if mins, okMins := metaPositiveFloat(windowRaw["window_duration_mins"]); okMins {
+		if mins == math.Trunc(mins) && int64(mins)%60 == 0 {
+			window.PeriodUnit, window.PeriodValue, window.WindowSeconds = structuredPeriod(int64(mins)/60, "hour")
+		} else if mins == math.Trunc(mins) {
+			window.PeriodUnit, window.PeriodValue, window.WindowSeconds = structuredPeriod(int64(mins), "minute")
+		} else {
+			window.PeriodUnit = "minute"
+			window.PeriodValue = quotaFloatPtr(mins)
+		}
+	}
+	if usedPercent, okUsed := metaFiniteFloat(windowRaw["used_percent"]); okUsed {
+		clamped := math.Max(0, math.Min(100, usedPercent))
+		window.Used = &clamped
+	}
+	if resetsAt, okReset := metaPositiveFloat(windowRaw["resets_at"]); okReset {
+		resetTime := time.Unix(int64(resetsAt), 0).UTC()
+		window.ResetAt = &resetTime
+	}
+	normalizeWindowValues(&window)
+
+	weeklyLimit := 100.0
+	weekly := cluster.QuotaWindow{
+		ID:            "meta-weekly",
+		Label:         quotaStringPtr("Weekly limit"),
+		Scope:         "account",
+		Mode:          "rolling",
+		Status:        "unknown",
+		Unit:          "percentage",
+		Limit:         &weeklyLimit,
+		PeriodUnit:    "week",
+		PeriodValue:   quotaFloatPtr(1),
+		WindowSeconds: quotaInt64Ptr(7 * 24 * 60 * 60),
+		Source:        "active_probe",
+		ObservedAt:    observedAt,
+		Priority:      1,
+	}
+	if usedPercent, okUsed := metaFiniteFloat(weeklyRaw["used_percent"]); okUsed {
+		clamped := math.Max(0, math.Min(100, usedPercent))
+		weekly.Used = &clamped
+	}
+	if resetsAt, okReset := metaPositiveFloat(weeklyRaw["resets_at"]); okReset {
+		resetTime := time.Unix(int64(resetsAt), 0).UTC()
+		weekly.ResetAt = &resetTime
+	}
+	normalizeWindowValues(&weekly)
+
+	return []cluster.QuotaWindow{window, weekly}, plan, nil
+}
+
+func metaFiniteFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return 0, false
+		}
+		return typed, true
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, errParse := strconv.ParseFloat(trimmed, 64)
+		if errParse != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+func metaPositiveFloat(value any) (float64, bool) {
+	parsed, ok := metaFiniteFloat(value)
+	return parsed, ok && parsed > 0
 }
 
 func probeCollectionError(failure *probeError, occurredAt time.Time) *cluster.QuotaCollectionError {

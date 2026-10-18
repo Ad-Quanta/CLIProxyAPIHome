@@ -35,6 +35,7 @@ const (
 	claudeProfileURL           = "https://api.anthropic.com/api/oauth/profile"
 	kimiUsageURL               = "https://api.kimi.com/coding/v1/usages"
 	xaiBillingURL              = "https://cli-chat-proxy.grok.com/v1/billing"
+	metaQuotaURL               = "https://api.meta.ai/muse-code/key"
 	codexUserAgent             = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 	antigravityUserAgent       = "antigravity/1.11.5 windows/amd64"
 	xaiTokenAuthHeader         = "X-XAI-Token-Auth"
@@ -42,6 +43,9 @@ const (
 	xaiClientVersionHeader     = "x-grok-client-version"
 	xaiClientVersionValue      = "0.2.93"
 	xaiGrokUserAgent           = "xai-grok-workspace/0.2.93"
+	metaAPIVersionHeader       = "x-api-version"
+	metaAPIVersionValue        = "1.0.0"
+	metaMuseUserAgent          = "muse-code/1.0.2"
 )
 
 var defaultAntigravityURLs = []string{
@@ -66,6 +70,7 @@ type Options struct {
 	ClaudeProfileURL       string
 	KimiUsageURL           string
 	XAIBillingURL          string
+	MetaQuotaURL           string
 	AntigravityURLs        []string
 	Now                    func() time.Time
 	HTTPClient             func(*coreauth.Auth, time.Duration) (*http.Client, error)
@@ -124,6 +129,9 @@ func NewCollector(repo *cluster.Repository, options Options) *Collector {
 	}
 	if strings.TrimSpace(options.XAIBillingURL) == "" {
 		options.XAIBillingURL = xaiBillingURL
+	}
+	if strings.TrimSpace(options.MetaQuotaURL) == "" {
+		options.MetaQuotaURL = metaQuotaURL
 	}
 	if len(options.AntigravityURLs) == 0 {
 		options.AntigravityURLs = append([]string(nil), defaultAntigravityURLs...)
@@ -389,6 +397,8 @@ func (c *Collector) probeCredential(ctx context.Context, auth *coreauth.Auth) (p
 		return probeResult{windows: windows, replaceWindows: true, replacePlan: true}, errProbe
 	case "xai":
 		return c.probeXAI(ctx, auth)
+	case "meta":
+		return c.probeMeta(ctx, auth)
 	default:
 		return probeResult{}, &probeError{code: "PROVIDER_UNSUPPORTED", message: "Credential provider does not have a quota collector.", retryable: false}
 	}
@@ -469,6 +479,14 @@ func codexResetCreditDetailsRequired(availableCount *int) bool {
 
 func (c *Collector) probeRequest(ctx context.Context, auth *coreauth.Auth, method string, targetURL string, body []byte, headers http.Header) ([]byte, http.Header, *probeError) {
 	token := quotaAccessToken(auth)
+	if token == "" {
+		return nil, nil, &probeError{code: "AUTH_TOKEN_UNAVAILABLE", message: "Credential access token is unavailable.", retryable: true}
+	}
+	return c.probeRequestWithToken(ctx, auth, token, method, targetURL, body, headers)
+}
+
+func (c *Collector) probeRequestWithToken(ctx context.Context, auth *coreauth.Auth, token string, method string, targetURL string, body []byte, headers http.Header) ([]byte, http.Header, *probeError) {
+	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, nil, &probeError{code: "AUTH_TOKEN_UNAVAILABLE", message: "Credential access token is unavailable.", retryable: true}
 	}
@@ -576,7 +594,7 @@ func quotaProbeEligible(auth *coreauth.Auth) bool {
 		return false
 	}
 	switch normalizedQuotaProvider(auth.Provider) {
-	case "codex", "claude", "antigravity", "kimi", "xai":
+	case "codex", "claude", "antigravity", "kimi", "xai", "meta":
 		return true
 	default:
 		return false
@@ -637,6 +655,8 @@ func normalizedQuotaProvider(provider string) string {
 		return "kimi"
 	case "xai", "grok":
 		return "xai"
+	case "meta", "muse":
+		return "meta"
 	default:
 		return strings.ToLower(strings.TrimSpace(provider))
 	}
