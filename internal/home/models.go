@@ -294,7 +294,8 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		}
 		configuredModels := len(configModels) > 0
 		if configuredModels {
-			models = configModels
+			// Refresh built-ins from older snapshots before applying credential exclusions.
+			models = registry.WithCodexBuiltins(configModels)
 		} else if entry := r.resolveConfigCodexKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry)
