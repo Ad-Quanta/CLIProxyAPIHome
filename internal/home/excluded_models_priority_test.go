@@ -1,12 +1,48 @@
 package home
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
+
+func TestReloadAuthsKeepsCredentialWithInvalidExcludedModels(t *testing.T) {
+	authDir := t.TempDir()
+	for name, raw := range map[string]string{
+		"invalid-type.json":    `{"type":"kimi-ai","email":"type@example.test","excluded_models":123}`,
+		"invalid-element.json": `{"type":"kimi-ai","email":"element@example.test","excluded_models":["Model-A",1]}`,
+	} {
+		if errWrite := os.WriteFile(filepath.Join(authDir, name), []byte(raw), 0o600); errWrite != nil {
+			t.Fatalf("write %s: %v", name, errWrite)
+		}
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	runtime := &Runtime{coreManager: manager, cfg: &config.Config{}, authDir: authDir}
+	t.Cleanup(func() {
+		for _, auth := range manager.List() {
+			registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+		}
+	})
+
+	// One invalid excluded_models value must not fail loading the existing credentials.
+	if errReload := runtime.ReloadAuths(t.Context()); errReload != nil {
+		t.Fatalf("ReloadAuths() error = %v", errReload)
+	}
+	got := make(map[string]string)
+	for _, auth := range manager.List() {
+		got[filepath.Base(auth.Attributes["path"])] = auth.Attributes["excluded_models"]
+	}
+	if rules, ok := got["invalid-type.json"]; !ok || rules != "" {
+		t.Fatalf("invalid-type.json loaded = %t with rules %q, want loaded without credential rules", ok, rules)
+	}
+	if rules, ok := got["invalid-element.json"]; !ok || rules != "model-a" {
+		t.Fatalf("invalid-element.json loaded = %t with rules %q, want loaded keeping model-a", ok, rules)
+	}
+}
 
 func TestRegisterModelsCredentialExclusionsOverrideGlobal(t *testing.T) {
 	catalog := registry.GetKimiModels()

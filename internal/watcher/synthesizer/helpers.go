@@ -88,21 +88,19 @@ func ApplyAuthExcludedModelsMeta(auth *coreauth.Auth, perKey []string, authKind 
 
 // SyncOAuthExcludedModelsAttributes rebuilds the excluded_models attributes of an OAuth auth
 // from its metadata, dropping stale values first because ApplyAuthExcludedModelsMeta never clears them.
-// Invalid metadata returns an error and leaves the attributes untouched.
+// Invalid rules are skipped and reported in the returned error, so strict callers can reject the
+// update while lenient callers keep the attributes rebuilt from the valid rules.
 func SyncOAuthExcludedModelsAttributes(auth *coreauth.Auth) error {
 	if auth == nil {
 		return nil
 	}
 	excluded, errExcluded := ExtractExcludedModelsFromMetadata(auth.Metadata)
-	if errExcluded != nil {
-		return errExcluded
-	}
 	if auth.Attributes != nil {
 		delete(auth.Attributes, "excluded_models")
 		delete(auth.Attributes, "excluded_models_hash")
 	}
 	ApplyAuthExcludedModelsMeta(auth, excluded, "oauth")
-	return nil
+	return errExcluded
 }
 
 // addConfigHeadersToAttrs adds header configuration to auth attributes.

@@ -180,25 +180,48 @@ func TestMigrateOAuthExcludedModelsAttributesSplitsLegacyStringMetadata(t *testi
 	}
 }
 
-func TestMigrateOAuthExcludedModelsAttributesFailsOnInvalidExclusionType(t *testing.T) {
+func TestMigrateOAuthExcludedModelsAttributesIgnoresInvalidExclusions(t *testing.T) {
 	t.Parallel()
 
 	db, repo := newExcludedModelsMigrationTestRepository(t)
+	// A non-string element keeps the valid rules.
+	seedExcludedModelsMigrationAuth(t, repo, &coreauth.Auth{
+		ID: "oauth-invalid-element", Provider: "antigravity",
+		Attributes: map[string]string{"auth_kind": "oauth", "excluded_models": "claude-,gpt-", "excluded_models_hash": "stale"},
+		Metadata:   map[string]any{"type": "antigravity", "excluded_models": []any{"Gemini-Pro-Agent", 123}},
+	})
+	// An invalid type is ignored, so the stale global snapshot is still removed.
 	seedExcludedModelsMigrationAuth(t, repo, &coreauth.Auth{
 		ID: "oauth-invalid-type", Provider: "antigravity",
-		Attributes: map[string]string{"auth_kind": "oauth", "excluded_models": "claude-,gpt-"},
-		Metadata:   map[string]any{"type": "antigravity", "excluded_models": []any{"gemini-pro-agent", 123}},
+		Attributes: map[string]string{"auth_kind": "oauth", "excluded_models": "claude-,gpt-", "excluded_models_hash": "stale"},
+		Metadata:   map[string]any{"type": "antigravity", "excluded_models": 123},
 	})
 
-	errMigrate := migrateOAuthExcludedModelsAttributes(db)
-	if errMigrate == nil || !strings.Contains(errMigrate.Error(), "oauth-invalid-type") {
-		t.Fatalf("migrateOAuthExcludedModelsAttributes() error = %v, want failure naming the invalid auth", errMigrate)
+	// Invalid rules must not block startup; runtime loading tolerates them the same way.
+	if errMigrate := migrateOAuthExcludedModelsAttributes(db); errMigrate != nil {
+		t.Fatalf("migrateOAuthExcludedModelsAttributes() error = %v", errMigrate)
 	}
-	auth, _, errAuth := repo.GetAuth(context.Background(), "oauth-invalid-type")
-	if errAuth != nil {
-		t.Fatalf("GetAuth() error = %v", errAuth)
+	load := func(id string) *coreauth.Auth {
+		t.Helper()
+		auth, _, errAuth := repo.GetAuth(context.Background(), id)
+		if errAuth != nil {
+			t.Fatalf("GetAuth(%s) error = %v", id, errAuth)
+		}
+		return auth
 	}
-	if auth.Attributes["excluded_models"] != "claude-,gpt-" {
-		t.Fatalf("excluded_models = %q, want untouched after failed migration", auth.Attributes["excluded_models"])
+
+	element := load("oauth-invalid-element")
+	if got, want := element.Attributes["excluded_models"], "gemini-pro-agent"; got != want {
+		t.Fatalf("oauth-invalid-element excluded_models = %q, want %q", got, want)
+	}
+	if hash := element.Attributes["excluded_models_hash"]; hash == "" || hash == "stale" {
+		t.Fatalf("oauth-invalid-element excluded_models_hash = %q, want recomputed hash", hash)
+	}
+
+	invalidType := load("oauth-invalid-type")
+	for _, key := range []string{"excluded_models", "excluded_models_hash"} {
+		if value, ok := invalidType.Attributes[key]; ok {
+			t.Fatalf("oauth-invalid-type %s = %q, want removed", key, value)
+		}
 	}
 }

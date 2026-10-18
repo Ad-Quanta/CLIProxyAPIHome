@@ -6,6 +6,7 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
 )
@@ -21,7 +22,9 @@ var oauthExcludedModelsAttributeKeys = []string{"excluded_models", "excluded_mod
 //
 // The upgrade requires stopping every older Home node first, so no concurrent writer exists.
 // Soft-deleted rows are skipped because restoring a credential writes a freshly synthesized auth.
-// Any record that cannot be rebuilt fails the migration so the schema version is not advanced.
+// Invalid excluded_models metadata does not fail the migration: like runtime loading, the valid
+// rules are kept and the rest are ignored with a warning. Any record that cannot be decoded or
+// rewritten fails the migration so the schema version is not advanced.
 func migrateOAuthExcludedModelsAttributes(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
@@ -67,7 +70,7 @@ func rebuildOAuthExcludedModelsAuthJSON(raw JSONB) (JSONB, bool, error) {
 		}
 	}
 	if errSync := synthesizer.SyncOAuthExcludedModelsAttributes(auth); errSync != nil {
-		return nil, false, errSync
+		log.WithError(errSync).Warnf("ignoring invalid excluded models in auth %s", auth.ID)
 	}
 
 	next := []byte(raw)

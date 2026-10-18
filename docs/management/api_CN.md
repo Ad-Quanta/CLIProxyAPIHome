@@ -3976,7 +3976,7 @@ Query 参数：
 
 `PUT /config/oauth/excluded-models/claude` 接收原始字符串数组。`DELETE /config/oauth/excluded-models/claude` 只删除该 provider；删除 `/config/oauth/excluded-models` 则移除整个映射。这些规则作用于 OAuth/文件凭证，上游 API Key 分组使用自己的 `excluded-models`。配置了非空凭证级 `excluded_models` 的凭证使用自己的规则而不是这里的全局规则；其余凭证在配置重新加载后即生效，无需改写凭证。
 
-升级说明：旧版本 Home 在保存 OAuth 凭证时会把这些全局规则合并写入凭证。数据库版本 7 的启动迁移会按每个 OAuth 凭证自己的 `excluded_models` 重新生成已存储的排除规则，清除这些合并副本。本次升级必须停机：启动新版本前先停掉所有旧版本 Home 节点，不要让新旧版本同时连接同一个数据库。仍在运行的旧节点可能把合并副本写回，而 PostgreSQL 之后不会再次执行该迁移。
+升级说明：旧版本 Home 在保存 OAuth 凭证时会把这些全局规则合并写入凭证。数据库版本 7 的启动迁移会按每个 OAuth 凭证自己的 `excluded_models` 重新生成已存储的排除规则，清除这些合并副本。已存储的非法 `excluded_models` 不会阻塞迁移：与运行时加载一致，保留合法规则，忽略非法项并记录警告。本次升级必须停机：启动新版本前先停掉所有旧版本 Home 节点，不要让新旧版本同时连接同一个数据库。仍在运行的旧节点可能把合并副本写回，而 PostgreSQL 之后不会再次执行该迁移。
 
 ### `/config/oauth/model-alias`
 
