@@ -1216,6 +1216,8 @@ Common errors:
 
 ## Client API Keys
 
+API key writes that explicitly reference a soft-deleted channel or model group are rejected atomically with `400 invalid_access_group`; refresh the group list before retrying. This applies to both management and user API key writes. Disabled groups remain valid bindings and retain their restrictions. Unknown IDs retain their legacy fail-closed behavior.
+
 ### GET `/access/api-keys`
 
 The response includes a strong `ETag` header for the complete visible API key collection. Clients that perform a read-modify-write replacement should send this value back in `If-Match` on `PUT /access/api-keys`.
@@ -3686,7 +3688,9 @@ Response: `{ "channel_group": ... }`.
 
 ### DELETE `/channel-groups/:id`
 
-Soft-deletes the group and its details.
+Soft-deletes the group and its details, and atomically removes its ID from API key `channels` and model group detail `channels`, including soft-deleted records. Other bindings, key identity, and user ownership are preserved. Removing the last API key channel binding makes credential selection unrestricted by that key; removing the last model-detail channel binding restores inheritance from the key. A config event is published when bindings change, and the local runtime config is refreshed. Disabled groups are not removed.
+
+On upgrade, startup migration also removes historical references to soft-deleted channel groups. Unknown group IDs are not silently removed.
 
 Response:
 
@@ -3861,7 +3865,9 @@ Response: `{ "model_group": ... }`.
 
 ### DELETE `/model-groups/:id`
 
-Soft-deletes the model group and its details.
+Soft-deletes the model group and its details, and atomically removes its ID from API key `model_groups`, including soft-deleted keys. Other bindings, key identity, and user ownership are preserved. Removing the last model group binding disables model filtering for that key. A config event is published when bindings change, and the local runtime config is refreshed. Disabled groups are not removed.
+
+On upgrade, startup migration also removes historical references to soft-deleted model groups. Unknown group IDs are not silently removed.
 
 Response:
 
