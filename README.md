@@ -6,6 +6,91 @@ Home is a comprehensive credential **management, scheduling, and distribution** 
 
 It serves as a centralized hub for managing and scheduling API credentials in large-scale CLIProxyAPI cluster deployments. CLIProxyAPI nodes communicate with Home to retrieve necessary API credentials and report usage statistics.
 
+## Home and Home Management Center (HMC)
+
+**Home and HMC are maintained in separate open-source repositories and bundled together in official Home releases.** This repository contains the Go backend, which owns credential management, scheduling, authentication, database storage, and APIs. [Home Management Center (HMC)](https://github.com/router-for-me/Home-Management-Center) contains the React/TypeScript frontend, including the landing page, administrator console, and user workspace.
+
+At runtime, HMC runs in the browser and calls Home's [Management API](docs/management/api.md) at `/v8/management` and [User API](docs/user/api.md) at `/user`. Home handles these requests and persists changes in its database. At build time, HMC's HTML, JavaScript, CSS, and other static assets are embedded into the Home executable through Go's `go:embed`.
+
+### Deploying an official release
+
+Official Home binaries and Docker images already include the HMC frontend. Deploy Home and its database, then open the Home HTTP address, such as `http://localhost:8327`:
+
+| Path | Page |
+| --- | --- |
+| `/` or `/index.html` | Landing page |
+| `/management.html` | Administrator console |
+| `/user.html` | User workspace |
+
+Node.js, Bun, and a separate frontend server are not required on the deployment host. Keep `management.disable-control-panel` set to `false` and configure a management key to use the administrator console; see [Management API authentication](docs/management/api.md#authentication). Database setup and configuration import are described under [Cluster Mode](#cluster-mode).
+
+The production frontend uses APIs on the same origin as the page. If you host HMC assets separately, configure that origin's reverse proxy to forward `/v8/management/*` and `/user/*` to Home. Selecting a different backend URL in the frontend is available only in development mode.
+
+### Developing both projects locally
+
+Clone the repositories into sibling directories. Home requires the Go version declared in [go.mod](go.mod); HMC requires Node.js 24+ and Bun 1.3+.
+
+```bash
+git clone https://github.com/router-for-me/CLIProxyAPIHome.git
+git clone https://github.com/router-for-me/Home-Management-Center.git
+```
+
+For a new local setup without `cluster.yaml`, copy Home's `config.example.yaml` to `config.yaml` and set a non-empty `management.secret-key`. Import that configuration into the local SQLite database, then start Home in one terminal:
+
+```bash
+cd CLIProxyAPIHome
+go run ./cmd/home -config config.yaml -import
+go run ./cmd/home -addr 127.0.0.1:8327
+```
+
+Import is an initialization step; editing `config.yaml` alone does not update the database-backed runtime. An existing configured backend can be used directly.
+
+Start HMC in another terminal:
+
+```bash
+cd Home-Management-Center
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open `http://localhost:3000/management.html`, enter `http://127.0.0.1:8327` as the management endpoint, and sign in with the management key. HMC serves frontend changes with hot reload while Home serves the APIs; frontend edits do not require rebuilding Home. For the user workspace at `http://localhost:3000/user.html`, HMC's development server proxies `/user` API requests to `http://127.0.0.1:8327` by default. Set `MANAGEMENT_DEV_PROXY_TARGET` when starting HMC if that backend address differs.
+
+### Building and releasing the bundled frontend
+
+The Home source checkout does not include generated HMC assets. To build a complete local executable, first build HMC and copy its entire `dist/` directory into Home's embedded asset directory. Starting from the parent of the two sibling repositories:
+
+```bash
+cd Home-Management-Center
+bun install --frozen-lockfile
+bun run build:embedded
+cp -R dist/. ../CLIProxyAPIHome/internal/managementasset/static/
+cd ../CLIProxyAPIHome
+go build -o CLIProxyAPIHome ./cmd/home
+```
+
+The bundle includes `index.html`, `management.html`, `user.html`, the `assets/` directory, and `panel-manifest.json` with frontend build metadata. Copy the complete bundle, including the scripts and styles referenced by the HTML entries. The generated files under `internal/managementasset/static/` are ignored by Git. A plain `go build` or `docker build` does not fetch or build HMC; prepare these assets before either command. Once built, the executable serves its embedded frontend without needing the HMC source directory.
+
+For local verification of an already-built frontend without recompiling Home, set `MANAGEMENT_STATIC_PATH` to the absolute path of HMC's complete `dist/` directory when starting Home. This explicitly replaces the embedded asset source with that directory.
+
+The [binary release workflow](.github/workflows/release.yaml) runs on Home tag pushes, and the [Docker workflow](.github/workflows/docker-image.yml) runs on `v*` tags. Both follow this sequence:
+
+1. Clone HMC's default branch and run `bun install --frozen-lockfile` and `bun run build:embedded`.
+2. Copy the complete frontend bundle into `internal/managementasset/static/` and pass it to the platform build jobs.
+3. Compile Home with the embedded frontend, then publish release archives or Docker images.
+
+The workflows currently require the `HOME_MANAGEMENT_CENTER_TOKEN` repository secret to clone HMC, including when reused in a fork. They use HMC's default-branch revision at build time, without matching it to the Home release tag. For a custom build with a specific frontend version, check out the desired HMC revision before building.
+
+Home does not download or automatically update the frontend at runtime. The `management.panel-github-repository` setting is retained for compatibility and does not switch the embedded bundle. Frontend updates reach normal deployments through a newly built Home binary or Docker image.
+
+### Issues and contributions
+
+Submit issues, feature requests, and pull requests to the repository responsible for the affected component:
+
+- **Frontend / Web UI**: For page layout, interactions, themes, translations, or browser compatibility, use [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues) and submit code changes to HMC.
+- **Home backend**: For Management API behavior, credential scheduling, database storage, clustering, or RESP communication, use [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues) and submit code changes here.
+
+Changes spanning the frontend and backend should link the corresponding issues or pull requests in both repositories. API changes must also update Home's [Management API documentation](docs/management/api.md) or [User API documentation](docs/user/api.md), as applicable, so HMC can integrate against the same contract.
+
 ## Key Features
 
 - **Scalable Node Management**: Supports connecting an unlimited number of CLIProxyAPI nodes for credential distribution, ideal for large-scale deployments.
