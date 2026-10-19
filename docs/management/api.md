@@ -3375,6 +3375,9 @@ Query parameters:
 | `search` | string | Optional case-insensitive contains match over the log `line` content. When set, the response includes a `search` field echoing the applied value so clients can detect support. |
 | `after` | integer or RFC3339 | Optional timestamp lower bound. |
 | `before` | integer or RFC3339 | Optional timestamp upper bound. |
+| `anchor_id` | positive integer | Optional inclusive snapshot ceiling record ID in `(timestamp DESC, id DESC)` order. Locks pagination against concurrent log writes. |
+| `before_id` | positive integer | Optional exclusive cursor record ID for loading older records in `(timestamp DESC, id DESC)` order. |
+| `after_id` | positive integer | Optional exclusive cursor record ID for tailing newer records in `(timestamp DESC, id DESC)` order. |
 | `limit` | integer | Maximum returned record count. Default is `100`, maximum is `1000`. |
 | `offset` | integer | Pagination offset. Default is `0`. |
 

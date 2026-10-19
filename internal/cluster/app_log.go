@@ -30,13 +30,17 @@ type AppLogQuery struct {
 	Search    string
 	After     *time.Time
 	Before    *time.Time
+	AnchorID  uint
+	BeforeID  uint
+	AfterID   uint
 	Limit     int
 	Offset    int
 }
 
 type AppLogQueryResult struct {
-	Records []AppLogRecord
-	Total   int64
+	Records  []AppLogRecord
+	Total    int64
+	AnchorID uint
 }
 
 // TableName returns the database table name.
@@ -114,7 +118,8 @@ func (r *Repository) ListAppLogs(ctx context.Context, opts AppLogQuery) (AppLogQ
 		return AppLogQueryResult{}, errDB
 	}
 
-	query := appLogQuery(db.WithContext(contextOrBackground(ctx)).Model(&AppLogRecord{}), opts)
+	ctxDB := db.WithContext(contextOrBackground(ctx))
+	query := appLogQuery(ctxDB, ctxDB.Model(&AppLogRecord{}), opts)
 
 	var total int64
 	if errCount := query.Count(&total).Error; errCount != nil {
@@ -132,10 +137,28 @@ func (r *Repository) ListAppLogs(ctx context.Context, opts AppLogQuery) (AppLogQ
 	if errFind := query.Order("timestamp DESC, id DESC").Find(&records).Error; errFind != nil {
 		return AppLogQueryResult{}, errFind
 	}
-	return AppLogQueryResult{Records: records, Total: total}, nil
+	anchorID := opts.AnchorID
+	if anchorID == 0 && opts.Offset == 0 && opts.BeforeID == 0 && opts.AfterID == 0 && len(records) > 0 {
+		anchorID = records[0].ID
+	}
+	return AppLogQueryResult{Records: records, Total: total, AnchorID: anchorID}, nil
 }
 
-func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
+func resolveAppLogCursor(db *gorm.DB, id uint) (time.Time, bool) {
+	if db == nil || id == 0 {
+		return time.Time{}, false
+	}
+	var cursor struct {
+		ID        uint
+		Timestamp time.Time
+	}
+	if err := db.Model(&AppLogRecord{}).Select("id, timestamp").Where("id = ?", id).Limit(1).Scan(&cursor).Error; err != nil || cursor.ID == 0 {
+		return time.Time{}, false
+	}
+	return cursor.Timestamp.UTC(), true
+}
+
+func appLogQuery(db *gorm.DB, query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	homeIP := strings.TrimSpace(opts.HomeIP)
 	if homeIP != "" {
 		query = query.Where("home_ip = ?", homeIP)
@@ -167,6 +190,27 @@ func appLogQuery(query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	}
 	if opts.Before != nil {
 		query = query.Where("timestamp < ?", opts.Before.UTC())
+	}
+	if opts.AnchorID > 0 {
+		if ts, ok := resolveAppLogCursor(db, opts.AnchorID); ok {
+			query = query.Where("(timestamp < ? OR (timestamp = ? AND id <= ?))", ts, ts, opts.AnchorID)
+		} else {
+			query = query.Where("id <= ?", opts.AnchorID)
+		}
+	}
+	if opts.BeforeID > 0 {
+		if ts, ok := resolveAppLogCursor(db, opts.BeforeID); ok {
+			query = query.Where("(timestamp < ? OR (timestamp = ? AND id < ?))", ts, ts, opts.BeforeID)
+		} else {
+			query = query.Where("id < ?", opts.BeforeID)
+		}
+	}
+	if opts.AfterID > 0 {
+		if ts, ok := resolveAppLogCursor(db, opts.AfterID); ok {
+			query = query.Where("(timestamp > ? OR (timestamp = ? AND id > ?))", ts, ts, opts.AfterID)
+		} else {
+			query = query.Where("id > ?", opts.AfterID)
+		}
 	}
 	return query
 }

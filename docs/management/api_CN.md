@@ -3373,6 +3373,9 @@ Query 参数：
 | `search` | string | 可选日志内容过滤条件，对 `line` 内容做大小写不敏感的包含匹配；设置后响应中会回显 `search` 字段，便于客户端识别后端是否支持。 |
 | `after` | integer 或 RFC3339 | 可选 timestamp 下界。 |
 | `before` | integer 或 RFC3339 | 可选 timestamp 上界。 |
+| `anchor_id` | positive integer | 可选快照锚点记录 ID（包含上界，按 `(timestamp DESC, id DESC)` 顺序），用于锁定历史翻页起点，防止并发写入新日志导致翻页错位或重复。 |
+| `before_id` | positive integer | 可选向前翻旧游标记录 ID（不包含，按 `(timestamp DESC, id DESC)` 顺序获取更早日志）。 |
+| `after_id` | positive integer | 可选向后追新游标记录 ID（不包含，按 `(timestamp DESC, id DESC)` 顺序获取更新日志）。 |
 | `limit` | integer | 最大返回记录数；默认 `100`，最大 `1000`。 |
 | `offset` | integer | 分页偏移量；默认 `0`。 |
 

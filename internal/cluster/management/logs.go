@@ -66,6 +66,21 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_before", errBefore)
 		return
 	}
+	anchorID, errAnchorID := appLogCursorID(firstNonEmptyQuery(c, "anchor_id", "anchor-id"), "anchor_id")
+	if errAnchorID != nil {
+		respondError(c, http.StatusBadRequest, "invalid_anchor_id", errAnchorID)
+		return
+	}
+	beforeID, errBeforeID := appLogCursorID(firstNonEmptyQuery(c, "before_id", "before-id"), "before_id")
+	if errBeforeID != nil {
+		respondError(c, http.StatusBadRequest, "invalid_before_id", errBeforeID)
+		return
+	}
+	afterID, errAfterID := appLogCursorID(firstNonEmptyQuery(c, "after_id", "after-id"), "after_id")
+	if errAfterID != nil {
+		respondError(c, http.StatusBadRequest, "invalid_after_id", errAfterID)
+		return
+	}
 
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -79,6 +94,9 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		Search:    search,
 		After:     after,
 		Before:    before,
+		AnchorID:  anchorID,
+		BeforeID:  beforeID,
+		AfterID:   afterID,
 		Limit:     limit,
 		Offset:    offset,
 	})
@@ -96,6 +114,15 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		"total":  result.Total,
 		"limit":  limit,
 		"offset": offset,
+	}
+	if result.AnchorID > 0 {
+		payload["anchor_id"] = result.AnchorID
+	}
+	if beforeID > 0 {
+		payload["before_id"] = beforeID
+	}
+	if afterID > 0 {
+		payload["after_id"] = afterID
 	}
 	if search != "" {
 		payload["search"] = search
@@ -393,6 +420,18 @@ func appLogOffset(raw string) (int, error) {
 		return 0, fmt.Errorf("offset must be a non-negative integer")
 	}
 	return offset, nil
+}
+
+func appLogCursorID(raw string, name string) (uint, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, errParse := strconv.ParseUint(value, 10, 64)
+	if errParse != nil || parsed == 0 || parsed > uint64(^uint(0)) {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return uint(parsed), nil
 }
 
 func appLogTimeQuery(raw string) (*time.Time, error) {
