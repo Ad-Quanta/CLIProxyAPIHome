@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
@@ -52,7 +53,15 @@ func (c *Collector) probeAntigravity(ctx context.Context, auth *coreauth.Auth) (
 	if errMarshal != nil {
 		return nil, &probeError{code: "PROBE_REQUEST_INVALID", message: "Antigravity quota request could not be created.", retryable: false}
 	}
-	headers := http.Header{"Content-Type": []string{"application/json"}, "User-Agent": []string{antigravityUserAgent}}
+	// Match the CPA inference User-Agent; outdated clients receive responses without the Gemini quota group.
+	configuredUserAgent := ""
+	if auth.Attributes != nil {
+		configuredUserAgent = strings.TrimSpace(auth.Attributes["user_agent"])
+	}
+	if configuredUserAgent == "" {
+		configuredUserAgent = quotaMetadataString(auth.Metadata, "user_agent")
+	}
+	headers := http.Header{"Content-Type": []string{"application/json"}, "User-Agent": []string{cpasdkauth.AntigravityRequestUserAgent(configuredUserAgent)}}
 	probeCtx, cancelProbe := context.WithTimeout(ctx, c.options.ProbeTimeout)
 	defer cancelProbe()
 	var lastError *probeError
