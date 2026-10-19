@@ -1078,14 +1078,14 @@ func (r *Repository) UpsertConfigValueWithResult(ctx context.Context, key string
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
 		}
-		if appconfig.IsOAuthProviderRoot(key) {
-			// SQLite needs a write lock before the read so another connection cannot
-			// commit a snapshot while this transaction retains an older OAuth view.
-			if tx.Dialector != nil && tx.Dialector.Name() == "sqlite" {
-				if _, errGate := lockConcurrencyActivationGate(tx); errGate != nil {
-					return errGate
-				}
+		// Every SQLite config upsert needs a write lock before its first read,
+		// including non-OAuth roots, to avoid upgrading a stale WAL snapshot.
+		if tx.Dialector != nil && tx.Dialector.Name() == "sqlite" {
+			if _, errGate := lockConcurrencyActivationGate(tx); errGate != nil {
+				return errGate
 			}
+		}
+		if appconfig.IsOAuthProviderRoot(key) {
 			var scoped ConfigRecord
 			errScope := tx.Where("key = ?", "oauth").First(&scoped).Error
 			if errScope != nil && !errors.Is(errScope, gorm.ErrRecordNotFound) {
