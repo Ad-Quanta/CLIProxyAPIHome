@@ -3621,6 +3621,8 @@ Unknown channel response:
 
 Channel groups restrict which auth records a client API key may use. If a client API key has an empty `channels` array, channel-group filtering is not applied.
 
+Downstream model listings fetched through CPA with a client API key expose only models registered by enabled credentials within that key's credential and model scopes, including model-specific channel bindings. Both scopes are intersected; when a restricted scope has no matching credential/model, Home returns an empty catalog, never the global catalog. CPA returns HTTP 200 with an empty list in the requested client format for a valid empty Home catalog. Authentication failures, policy lookup failures, and malformed catalog responses remain errors rather than being converted to empty lists. Policy lookup failures return an error. Filtering precedes model deduplication and capability aggregation. Temporary cooldowns and concurrency saturation do not remove otherwise permitted models from the catalog. Management model catalogs are unchanged.
+
 ### GET `/channel-groups`
 
 Example response:
