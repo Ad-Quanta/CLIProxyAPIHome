@@ -155,7 +155,7 @@ func resolveAppLogCursor(db *gorm.DB, id uint) (time.Time, bool) {
 	if err := db.Model(&AppLogRecord{}).Select("id, timestamp").Where("id = ?", id).Limit(1).Scan(&cursor).Error; err != nil || cursor.ID == 0 {
 		return time.Time{}, false
 	}
-	return cursor.Timestamp.UTC(), true
+	return cursor.Timestamp, true
 }
 
 func appLogQuery(db *gorm.DB, query *gorm.DB, opts AppLogQuery) *gorm.DB {
@@ -193,7 +193,7 @@ func appLogQuery(db *gorm.DB, query *gorm.DB, opts AppLogQuery) *gorm.DB {
 	}
 	if opts.AnchorID > 0 {
 		if ts, ok := resolveAppLogCursor(db, opts.AnchorID); ok {
-			query = query.Where("(timestamp < ? OR (timestamp = ? AND id <= ?))", ts, ts, opts.AnchorID)
+			query = query.Where("(timestamp < ? OR (timestamp = ? AND id <= ?) OR id = ?)", ts, ts, opts.AnchorID, opts.AnchorID)
 		} else {
 			query = query.Where("id <= ?", opts.AnchorID)
 		}
