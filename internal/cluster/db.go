@@ -157,6 +157,10 @@ func autoMigratePostgresContext(ctx context.Context, db *gorm.DB, runWhenCurrent
 		runWhenCurrent,
 		postgresSchemaMigrationOperations(db, startedAt, ctx, func(lockedCtx context.Context, tx *gorm.DB, _ int64, requiredVersion int64) error {
 			lockedDB := tx.WithContext(lockedCtx)
+			// Acquire the binding lock before schema/row locks to match live API key writes.
+			if errLock := lockAPIKeyMutationTransaction(lockedDB); errLock != nil {
+				return errLock
+			}
 			if errSchema := autoMigrateSchema(lockedDB); errSchema != nil {
 				return errSchema
 			}
@@ -247,6 +251,7 @@ func runCustomMigrations(db *gorm.DB) error {
 		{name: "migrate_usage_provider_api_key_sources", run: migrateUsageProviderAPIKeySources},
 		{name: "migrate_usage_service_tiers", run: migrateUsageServiceTiers},
 		{name: "migrate_legacy_api_keys", run: migrateLegacyAPIKeys},
+		{name: "migrate_deleted_access_group_bindings", run: migrateDeletedAccessGroupBindings},
 		{name: "migrate_oauth_excluded_models_attributes", run: migrateOAuthExcludedModelsAttributes},
 	}
 	for _, migration := range migrations {

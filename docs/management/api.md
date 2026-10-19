@@ -1216,6 +1216,8 @@ Common errors:
 
 ## Client API Keys
 
+API key writes that explicitly reference a soft-deleted channel or model group are rejected atomically with `400 invalid_access_group`; refresh the group list before retrying. This applies to both management and user API key writes. Disabled groups remain valid bindings and retain their restrictions. Unknown IDs retain their legacy fail-closed behavior.
+
 ### GET `/access/api-keys`
 
 The response includes a strong `ETag` header for the complete visible API key collection. Clients that perform a read-modify-write replacement should send this value back in `If-Match` on `PUT /access/api-keys`.
@@ -3619,6 +3621,8 @@ Unknown channel response:
 
 Channel groups restrict which auth records a client API key may use. If a client API key has an empty `channels` array, channel-group filtering is not applied.
 
+Downstream model listings fetched through CPA with a client API key expose only models registered by enabled credentials within that key's credential and model scopes, including model-specific channel bindings. Both scopes are intersected; when a restricted scope has no matching credential/model, Home returns an empty catalog, never the global catalog. CPA returns HTTP 200 with an empty list in the requested client format for a valid empty Home catalog. Authentication failures, policy lookup failures, and malformed catalog responses remain errors rather than being converted to empty lists. Policy lookup failures return an error. Filtering precedes model deduplication and capability aggregation. Temporary cooldowns and concurrency saturation do not remove otherwise permitted models from the catalog. Management model catalogs are unchanged.
+
 ### GET `/channel-groups`
 
 Example response:
@@ -3686,7 +3690,9 @@ Response: `{ "channel_group": ... }`.
 
 ### DELETE `/channel-groups/:id`
 
-Soft-deletes the group and its details.
+Soft-deletes the group and its details, and atomically removes its ID from API key `channels` and model group detail `channels`, including soft-deleted records. Other bindings, key identity, and user ownership are preserved. Removing the last API key channel binding makes credential selection unrestricted by that key; removing the last model-detail channel binding restores inheritance from the key. A config event is published when bindings change, and the local runtime config is refreshed. Disabled groups are not removed.
+
+On upgrade, startup migration also removes historical references to soft-deleted channel groups. Unknown group IDs are not silently removed.
 
 Response:
 
@@ -3861,7 +3867,9 @@ Response: `{ "model_group": ... }`.
 
 ### DELETE `/model-groups/:id`
 
-Soft-deletes the model group and its details.
+Soft-deletes the model group and its details, and atomically removes its ID from API key `model_groups`, including soft-deleted keys. Other bindings, key identity, and user ownership are preserved. Removing the last model group binding disables model filtering for that key. A config event is published when bindings change, and the local runtime config is refreshed. Disabled groups are not removed.
+
+On upgrade, startup migration also removes historical references to soft-deleted model groups. Unknown group IDs are not silently removed.
 
 Response:
 

@@ -1215,6 +1215,8 @@ JSON 语法错误，或请求体无法解析到足以可靠定位具体字段时
 
 ## 客户端 API Keys
 
+API key 写入若显式引用已软删除的凭证范围或模型范围，会原子拒绝并返回 `400 invalid_access_group`；请刷新范围列表后重试。此规则同时适用于管理端和用户端 API key 写入。禁用但未删除的范围仍可绑定，并保留其限制。未知 ID 保持原有的拒绝放行行为。
+
 ### GET `/access/api-keys`
 
 响应会包含表示完整可见 API key 集合的强 `ETag` header。执行“读取-修改-写回”全量替换的客户端，应在 `PUT /access/api-keys` 时通过 `If-Match` 回传该值。
@@ -3617,6 +3619,8 @@ Path 或 query 参数：
 
 Channel groups 限制某个客户端 API key 可以使用哪些 auth records。如果客户端 API key 的 `channels` 是空数组，则不应用 channel-group 过滤。
 
+客户端通过 CPA 使用 API key 获取模型列表时，只展示该 key 的凭证范围和模型范围内、由已启用凭证注册的模型，并应用模型明细的专属 channel 绑定。两类范围取交集；受限范围内没有匹配凭证或模型时，Home 返回空模型目录，不会回退到完整列表。CPA 收到 Home 的合法空模型目录时，按客户端协议返回 HTTP 200 和空列表。鉴权失败、权限查询失败和目录响应格式异常仍返回错误，不会转换成空列表。权限查询失败时返回错误。过滤先于模型去重和能力汇总，短暂冷却或并发占满不会使原本有权访问的模型从列表中消失。管理端模型目录保持不变。
+
 ### GET `/channel-groups`
 
 输出示例：
@@ -3684,7 +3688,9 @@ Channel groups 限制某个客户端 API key 可以使用哪些 auth records。�
 
 ### DELETE `/channel-groups/:id`
 
-软删除 group 及其 details。
+软删除 group 及其 details，并在同一事务中从 API key 的 `channels` 和 model group detail 的 `channels` 中移除该 ID，包括软删除记录中的引用。保留其他绑定、密钥身份及用户归属。移除 API key 的最后一个凭证范围后，该 key 不再额外限制凭证；移除模型明细的最后一个凭证范围后，恢复继承 key 的凭证范围。绑定发生变化时发布配置事件，并刷新本地运行时配置。禁用但未删除的范围不会被移除。
+
+升级后的启动迁移也会清理历史上已软删除凭证范围的残留引用，不会静默移除未知范围 ID。
 
 输出：
 
@@ -3859,7 +3865,9 @@ Model groups 限制某个客户端 API key 可以使用哪些模型 ID。如果�
 
 ### DELETE `/model-groups/:id`
 
-软删除 model group 及其 details。
+软删除 model group 及其 details，并在同一事务中从 API key 的 `model_groups` 中移除该 ID，包括软删除 key 中的引用。保留其他绑定、密钥身份及用户归属。移除最后一个模型范围后，该 key 不再进行模型过滤。绑定发生变化时发布配置事件，并刷新本地运行时配置。禁用但未删除的范围不会被移除。
+
+升级后的启动迁移也会清理历史上已软删除模型范围的残留引用，不会静默移除未知范围 ID。
 
 输出：
 

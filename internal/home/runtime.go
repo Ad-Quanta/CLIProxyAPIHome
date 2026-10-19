@@ -217,6 +217,10 @@ type apiKeyModelScopedDispatchStore interface {
 	AllowedDispatchIDsForAPIKeyModel(ctx context.Context, apiKey string, modelID string) ([]string, []string, error)
 }
 
+type apiKeyModelAccessStore interface {
+	ModelAccessForAPIKey(ctx context.Context, apiKey string) (*coreauth.ModelAccess, error)
+}
+
 // NewRuntime creates a new runtime.
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -1065,6 +1069,28 @@ func concurrencyExcludedCandidates(opts coreauth.Options) []coreauth.ExcludedCon
 	}
 	candidates, _ := opts.Metadata[coreauth.ExcludedConcurrencyCandidatesMetadataKey].([]coreauth.ExcludedConcurrencyCandidate)
 	return candidates
+}
+
+// ModelAccessForAPIKey resolves listing permissions without selecting credentials.
+func (r *Runtime) ModelAccessForAPIKey(ctx context.Context, apiKey string) (*coreauth.ModelAccess, error) {
+	if r == nil {
+		return nil, fmt.Errorf("home runtime: runtime is nil")
+	}
+	if r.clusterAdapter == nil {
+		return nil, nil
+	}
+	store, ok := r.clusterAdapter.(apiKeyModelAccessStore)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("home runtime: model access policy unavailable")
+	}
+	policy, errPolicy := store.ModelAccessForAPIKey(ctx, strings.TrimSpace(apiKey))
+	if errPolicy != nil {
+		return nil, errPolicy
+	}
+	if policy == nil {
+		return nil, fmt.Errorf("home runtime: model access policy unavailable")
+	}
+	return policy, nil
 }
 
 func (r *Runtime) allowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
