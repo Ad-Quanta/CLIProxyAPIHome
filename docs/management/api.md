@@ -3375,8 +3375,17 @@ Query parameters:
 | `search` | string | Optional case-insensitive contains match over the log `line` content. When set, the response includes a `search` field echoing the applied value so clients can detect support. |
 | `after` | integer or RFC3339 | Optional timestamp lower bound. |
 | `before` | integer or RFC3339 | Optional timestamp upper bound. |
+| `anchor_id` | positive integer | Optional inclusive ingestion ID ceiling (`id <= anchor_id`). Reuse the server-returned value for historical pages; this is independent of timestamp ordering. |
+| `before_id` | positive integer | Optional exclusive cursor record ID for loading older records in `(timestamp DESC, id DESC)` order. |
+| `after_id` | positive integer | Optional exclusive cursor record ID for tailing newer records in `(timestamp DESC, id DESC)` order. |
 | `limit` | integer | Maximum returned record count. Default is `100`, maximum is `1000`. |
 | `offset` | integer | Pagination offset. Default is `0`. |
+
+Cursor pagination is available on the v8 route only. When `anchor_id` is omitted, the server captures the maximum stored log ID and returns it as `anchor_id` (omitted when the entire log table is empty). The ceiling may belong to a record outside the current filters or page; never infer it from the first returned record. Reuse it with `offset`, or with `before_id` and `offset=0`, to exclude subsequently assigned IDs even if their timestamps are older. All filters and cursor bounds are intersected; results always use `(timestamp DESC, id DESC)` order. `before_id` and `after_id` are exclusive chronological positions, not ingestion ID comparisons. `total` counts the matching rows after all bounds, before `limit` and `offset`; a `before_id` response therefore reports the remaining older rows, not the original list total. Supplied `before_id` and `after_id` values are echoed in the response.
+
+Each request reads its ceiling, count, cursor timestamps, and rows from one consistent database snapshot. The ID ceiling does not retain a database snapshot across requests: deletions, database restores, and PostgreSQL transactions that had already allocated lower IDs but commit later can change the bounded set. Timestamp cursors support chronological navigation; `after_id` alone does not guarantee delivery of late-arriving records with older timestamps.
+
+Cursor IDs must fit the database's signed 64-bit ID range (and the server's `uint` range). Invalid values return HTTP `400` with `invalid_anchor_id`, `invalid_before_id`, or `invalid_after_id`. A missing `before_id` or `after_id` record returns HTTP `409` with `log_cursor_expired`; refresh the list and restart pagination instead of retrying that cursor. Database read failures return HTTP `500` with `log_load_failed`. The `anchor_id` ceiling remains usable if the record with that ID is deleted.
 
 Example response:
 
@@ -3394,6 +3403,7 @@ Example response:
       "created_at": "2026-05-29T01:02:04Z"
     }
   ],
+  "anchor_id": 1,
   "total": 1,
   "limit": 100,
   "offset": 0
