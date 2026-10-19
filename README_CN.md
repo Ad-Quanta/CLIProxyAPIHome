@@ -8,32 +8,17 @@ Home 是一个为 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) �
 
 ## Home 与 Home Management Center（HMC）的关系
 
-**Home 与 HMC 在两个开源仓库中独立维护，并在 Home 的正式发行版中一起打包交付。** 本仓库提供 Go 后端，负责凭证管理、调度、认证、数据库存储及 API。[Home Management Center（HMC）](https://github.com/router-for-me/Home-Management-Center) 提供 React/TypeScript 前端，包括首页、管理员控制台和用户工作台。
-
-运行时，HMC 在浏览器中执行，通过 `/v8/management` 下的 [Management API](docs/management/api_CN.md) 和 `/user` 下的 [User API](docs/user/api_CN.md) 与 Home 交互；Home 处理请求并将变更写入数据库。构建时，HMC 生成的 HTML、JavaScript、CSS 等静态资源通过 Go 的 `go:embed` 嵌入 Home 可执行文件。
+Home 提供后端服务，[Home Management Center（HMC）](https://github.com/router-for-me/Home-Management-Center) 为 Home 提供可视化 Web 界面。**两个开源项目独立维护，HMC 页面内嵌于 Home 的正式发行版中，统一部署和更新。**
 
 ### 部署正式发行版
 
-Home 官方二进制和 Docker 镜像已包含 HMC 前端。部署 Home 及其数据库后，访问 Home 的 HTTP 地址，例如 `http://localhost:8327`：
+Home 官方二进制和 Docker 镜像已包含 Web 界面，无需单独部署 HMC。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/management.html`，用户入口为 `/user.html`。
 
-| 路径 | 页面 |
-| --- | --- |
-| `/` 或 `/index.html` | 首页 |
-| `/management.html` | 管理员控制台 |
-| `/user.html` | 用户工作台 |
-
-部署机器无需安装 Node.js、Bun 或单独运行前端服务。使用管理员控制台时，保持 `management.disable-control-panel` 为 `false`，并配置管理密钥；具体见 [Management API 认证说明](docs/management/api_CN.md)。数据库配置与配置导入方式见下文[集群模式](#集群模式)。
-
-前端生产构建使用页面同源的 API。如果将 HMC 静态资源单独托管，需要在页面所在域名下通过反向代理，将 `/v8/management/*` 和 `/user/*` 请求转发给 Home。前端仅在开发模式下支持填写其他后端地址。
+管理员登录需要管理密钥，配置方法见[认证说明](docs/management/api_CN.md)。数据库配置与配置导入方式见下文[集群模式](#集群模式)。更新 Web 界面时，升级 Home 二进制或 Docker 镜像即可。
 
 ### 本地同时开发两个项目
 
-将两个仓库克隆到同一父目录下。Home 需要 [go.mod](go.mod) 中声明的 Go 版本；HMC 需要 Node.js 24+ 和 Bun 1.3+。
-
-```bash
-git clone https://github.com/router-for-me/CLIProxyAPIHome.git
-git clone https://github.com/router-for-me/Home-Management-Center.git
-```
+开发前端时，将两个仓库克隆到同一父目录下，分别在两个终端中运行 Home 和 HMC。环境要求见 Home 的 [go.mod](go.mod) 和 [HMC 开发说明](https://github.com/router-for-me/Home-Management-Center#readme)。
 
 首次在本地搭建且没有 `cluster.yaml` 时，将 Home 的 `config.example.yaml` 复制为 `config.yaml`，填写非空的 `management.secret-key`。先将配置导入本地 SQLite 数据库，再在一个终端中启动 Home：
 
@@ -43,7 +28,7 @@ go run ./cmd/home -config config.yaml -import
 go run ./cmd/home -addr 127.0.0.1:8327
 ```
 
-导入属于初始化步骤；仅修改 `config.yaml` 不会更新数据库中的运行配置。已有配置好的后端时，可以直接连接该后端。
+已有配置好的 Home 后端时，可以直接使用。
 
 在另一个终端中启动 HMC：
 
@@ -53,11 +38,11 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-打开 `http://localhost:3000/management.html`，将管理端点填写为 `http://127.0.0.1:8327`，使用管理密钥登录。HMC 开发服务负责前端热更新，Home 负责 API，修改前端无需重新编译 Home。开发用户工作台时，访问 `http://localhost:3000/user.html`；HMC 开发服务默认将 `/user` API 请求代理到 `http://127.0.0.1:8327`，后端地址不同时可在启动 HMC 时设置 `MANAGEMENT_DEV_PROXY_TARGET`。
+打开 `http://localhost:3000/management.html`，将管理端点填写为 `http://127.0.0.1:8327`，使用管理密钥登录。修改前端后即可预览，无需重新编译 Home。
 
 ### 前端内嵌构建与发布流程
 
-Home 源码仓库不包含生成后的 HMC 资源。要在本地构建包含完整前端的可执行文件，需要先构建 HMC，再将整个 `dist/` 目录复制到 Home 的内嵌资源目录。从两个仓库的共同父目录开始执行：
+从源码构建包含 Web 界面的 Home 时，需要先构建 HMC，将完整产物复制到 Home 后再编译。从两个仓库的共同父目录开始执行：
 
 ```bash
 cd Home-Management-Center
@@ -68,28 +53,9 @@ cd ../CLIProxyAPIHome
 go build -o CLIProxyAPIHome ./cmd/home
 ```
 
-前端产物包括 `index.html`、`management.html`、`user.html`、`assets/` 目录，以及记录前端构建信息的 `panel-manifest.json`。复制时应包含完整产物和 HTML 引用的脚本、样式。`internal/managementasset/static/` 下的生成文件已被 Git 忽略。单独执行 `go build` 或 `docker build` 不会拉取或构建 HMC，执行前应先准备这些资源。编译完成后，Home 可执行文件即可提供内嵌页面，运行时无需保留 HMC 源码目录。
+Home 源码仓库不包含生成后的前端产物，`go build` 和 `docker build` 也不会自动构建 HMC。因此，无论构建二进制还是 Docker 镜像，都需要先准备好完整的前端产物。
 
-如果只想在本地验证构建好的前端而不重新编译 Home，可在启动 Home 时将 `MANAGEMENT_STATIC_PATH` 设为 HMC 完整 `dist/` 目录的绝对路径，显式使用该目录替代内嵌资源。
-
-[二进制发布工作流](.github/workflows/release.yaml) 在推送 Home 标签时运行，[Docker 工作流](.github/workflows/docker-image.yml) 在推送 `v*` 标签时运行。两者均按以下顺序执行：
-
-1. 克隆 HMC 默认分支，执行 `bun install --frozen-lockfile` 和 `bun run build:embedded`。
-2. 将完整前端产物复制到 `internal/managementasset/static/`，传递给各平台构建任务。
-3. 编译包含内嵌前端的 Home，再发布二进制压缩包或 Docker 镜像。
-
-当前工作流仍要求配置 `HOME_MANAGEMENT_CENTER_TOKEN` 仓库 Secret 来克隆 HMC，Fork 后复用工作流时也需配置。工作流使用构建时的 HMC 默认分支版本，不会按 Home 发布标签匹配 HMC 标签；自定义构建若需固定前端版本，应先在 HMC 仓库检出指定版本再构建。
-
-Home 运行时不会下载或自动更新前端。`management.panel-github-repository` 配置仅为兼容保留，修改它不会切换已内嵌的前端。常规部署通过更新重新构建的 Home 二进制或 Docker 镜像来更新前端。
-
-### 问题反馈与贡献
-
-提交问题、功能建议和 Pull Request 时，请根据涉及的组件选择对应仓库：
-
-- **前端 / Web UI**：页面布局、交互、主题、翻译或浏览器兼容性相关问题，请提交到 [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues)，代码修改提交至 HMC 仓库。
-- **Home 后端**：Management API 行为、凭证调度、数据库存储、集群或 RESP 通信相关问题，请提交到 [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues)，代码修改提交至本仓库。
-
-同时涉及前后端的改动，应在两个仓库中关联对应的 Issue 或 Pull Request。API 变更还需同步更新 Home 的 [Management API 文档](docs/management/api_CN.md) 或 [User API 文档](docs/user/api_CN.md)，使 HMC 按同一接口约定完成对接。
+正式发布会自动完成上述过程：推送版本标签后，发布流程先构建前端，再打包 Home，生成并发布包含 Web 界面的二进制或 Docker 镜像。具体见[二进制发布工作流](.github/workflows/release.yaml)和 [Docker 工作流](.github/workflows/docker-image.yml)。
 
 ## 核心特性
 
@@ -151,7 +117,12 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 ## 贡献
 
-欢迎贡献！请随时提交 Pull Request。
+欢迎提交问题、功能建议和 Pull Request，请根据涉及的组件选择对应仓库：
+
+- **前端 / Web UI**：页面显示、交互等问题请提交到 [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues)，前端代码修改提交至 HMC 仓库。
+- **Home 后端**：服务运行、凭证调度、数据管理等问题请提交到 [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues)，后端代码修改提交至本仓库。
+
+同时涉及两个项目的改动，请关联对应的 Issue 或 Pull Request；接口变更还需同步更新相关的 [Management API](docs/management/api_CN.md) 或 [User API](docs/user/api_CN.md) 文档。
 
 1. Fork 仓库
 2. 创建您的功能分支（`git checkout -b feature/amazing-feature`）
