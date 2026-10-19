@@ -3373,11 +3373,17 @@ Query 参数：
 | `search` | string | 可选日志内容过滤条件，对 `line` 内容做大小写不敏感的包含匹配；设置后响应中会回显 `search` 字段，便于客户端识别后端是否支持。 |
 | `after` | integer 或 RFC3339 | 可选 timestamp 下界。 |
 | `before` | integer 或 RFC3339 | 可选 timestamp 上界。 |
-| `anchor_id` | positive integer | 可选快照锚点记录 ID（包含上界，按 `(timestamp DESC, id DESC)` 顺序），用于锁定历史翻页起点，防止并发写入新日志导致翻页错位或重复。 |
+| `anchor_id` | positive integer | 可选入库 ID 上界（包含，`id <= anchor_id`）。历史翻页时沿用服务端返回的值；该上界独立于日志时间顺序。 |
 | `before_id` | positive integer | 可选向前翻旧游标记录 ID（不包含，按 `(timestamp DESC, id DESC)` 顺序获取更早日志）。 |
 | `after_id` | positive integer | 可选向后追新游标记录 ID（不包含，按 `(timestamp DESC, id DESC)` 顺序获取更新日志）。 |
 | `limit` | integer | 最大返回记录数；默认 `100`，最大 `1000`。 |
 | `offset` | integer | 分页偏移量；默认 `0`。 |
+
+游标分页仅适用于 v8 路由。不传 `anchor_id` 时，服务端读取日志表当前最大 ID，并通过 `anchor_id` 返回（整个日志表为空时省略）。该 ID 对应的记录可能不在当前过滤条件或当前页内，不能用返回的首条日志 ID 推算。历史翻页时将其与 `offset`，或 `before_id` 加 `offset=0` 一起传回，即可排除之后分配的新 ID，包括时间较早的迟到日志。所有过滤条件和游标边界取交集，结果始终按 `(timestamp DESC, id DESC)` 排序。`before_id`、`after_id` 表示不含边界的时间排序位置，不是单纯比较入库 ID。`total` 是应用全部条件后、应用 `limit` 和 `offset` 前的记录数，因此带 `before_id` 的响应表示剩余旧日志数，不是原列表总数。传入的 `before_id`、`after_id` 会在响应中回显。
+
+单次请求的上界、总数、游标时间和记录使用同一数据库读取快照。ID 上界不跨请求保留数据库快照：删除日志、恢复数据库，以及 PostgreSQL 中已分配较小 ID 但稍后才提交的事务，仍可能改变范围内的数据。时间游标用于按时间顺序导航，单独使用 `after_id` 不保证获取时间更早的迟到日志。
+
+游标 ID 必须处于数据库有符号 64 位 ID 范围内，同时不能超过服务端 `uint` 范围。非法值返回 HTTP `400`，错误码为 `invalid_anchor_id`、`invalid_before_id` 或 `invalid_after_id`。`before_id` 或 `after_id` 对应的记录不存在时，返回 HTTP `409` 和 `log_cursor_expired`；客户端应刷新列表并重新开始分页，不应反复重试原游标。数据库读取失败返回 HTTP `500` 和 `log_load_failed`。即使对应记录被删除，`anchor_id` 仍可作为 ID 上界使用。
 
 输出示例：
 
@@ -3395,6 +3401,7 @@ Query 参数：
       "created_at": "2026-05-29T01:02:04Z"
     }
   ],
+  "anchor_id": 1,
   "total": 1,
   "limit": 100,
   "offset": 0

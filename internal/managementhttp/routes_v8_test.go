@@ -47,6 +47,11 @@ func TestManagementV8Routes(t *testing.T) {
 			t.Errorf("legacy setting registered in v8: %s", path)
 		}
 	}
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/v8/management/observability/logs?anchor_id=invalid", nil))
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "invalid_anchor_id") {
+		t.Fatalf("v8 logs did not use the cursor-aware handler: status %d, body %s", resp.Code, resp.Body.String())
+	}
 }
 
 func TestManagementV8QuotaRoutesRemainAvailable(t *testing.T) {

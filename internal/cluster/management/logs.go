@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -46,6 +47,15 @@ var requestLogForwardResponseHeaderAllowlist = map[string]struct{}{
 
 // GetLogs returns app log records stored in the database.
 func (h *Handler) GetLogs(c *gin.Context) {
+	h.getLogs(c, false)
+}
+
+// GetLogsV8 returns app log records with ingestion bounds and chronological cursors.
+func (h *Handler) GetLogsV8(c *gin.Context) {
+	h.getLogs(c, true)
+}
+
+func (h *Handler) getLogs(c *gin.Context, cursorPagination bool) {
 	limit, errLimit := appLogLimit(c.Query("limit"))
 	if errLimit != nil {
 		respondError(c, http.StatusBadRequest, "invalid_limit", errLimit)
@@ -66,20 +76,24 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_before", errBefore)
 		return
 	}
-	anchorID, errAnchorID := appLogCursorID(firstNonEmptyQuery(c, "anchor_id", "anchor-id"), "anchor_id")
-	if errAnchorID != nil {
-		respondError(c, http.StatusBadRequest, "invalid_anchor_id", errAnchorID)
-		return
-	}
-	beforeID, errBeforeID := appLogCursorID(firstNonEmptyQuery(c, "before_id", "before-id"), "before_id")
-	if errBeforeID != nil {
-		respondError(c, http.StatusBadRequest, "invalid_before_id", errBeforeID)
-		return
-	}
-	afterID, errAfterID := appLogCursorID(firstNonEmptyQuery(c, "after_id", "after-id"), "after_id")
-	if errAfterID != nil {
-		respondError(c, http.StatusBadRequest, "invalid_after_id", errAfterID)
-		return
+	var anchorID, beforeID, afterID uint
+	if cursorPagination {
+		for _, cursor := range []struct {
+			name  string
+			alias string
+			value *uint
+		}{
+			{"anchor_id", "anchor-id", &anchorID},
+			{"before_id", "before-id", &beforeID},
+			{"after_id", "after-id", &afterID},
+		} {
+			parsed, errCursor := appLogCursorID(firstNonEmptyQuery(c, cursor.name, cursor.alias), cursor.name)
+			if errCursor != nil {
+				respondError(c, http.StatusBadRequest, "invalid_"+cursor.name, errCursor)
+				return
+			}
+			*cursor.value = parsed
+		}
 	}
 
 	ctx, cancel := h.requestContext(c)
@@ -101,6 +115,10 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		Offset:    offset,
 	})
 	if errLogs != nil {
+		if errors.Is(errLogs, cluster.ErrAppLogCursorNotFound) {
+			respondError(c, http.StatusConflict, "log_cursor_expired", errLogs)
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "log_load_failed", errLogs)
 		return
 	}
@@ -115,7 +133,7 @@ func (h *Handler) GetLogs(c *gin.Context) {
 		"limit":  limit,
 		"offset": offset,
 	}
-	if result.AnchorID > 0 {
+	if cursorPagination && result.AnchorID > 0 {
 		payload["anchor_id"] = result.AnchorID
 	}
 	if beforeID > 0 {
@@ -428,8 +446,8 @@ func appLogCursorID(raw string, name string) (uint, error) {
 		return 0, nil
 	}
 	parsed, errParse := strconv.ParseUint(value, 10, 64)
-	if errParse != nil || parsed == 0 || parsed > uint64(^uint(0)) {
-		return 0, fmt.Errorf("%s must be a positive integer", name)
+	if errParse != nil || parsed == 0 || parsed > math.MaxInt64 || parsed > uint64(^uint(0)) {
+		return 0, fmt.Errorf("%s must be a positive integer within the database ID range", name)
 	}
 	return uint(parsed), nil
 }

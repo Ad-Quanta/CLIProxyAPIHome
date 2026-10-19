@@ -158,7 +158,7 @@ func TestGetLogsCursorPaginationPreventsDrift(t *testing.T) {
 
 	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
 	engine := gin.New()
-	engine.GET("/logs", handler.GetLogs)
+	engine.GET("/logs", handler.GetLogsV8)
 
 	type logResponse struct {
 		Logs []struct {
