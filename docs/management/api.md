@@ -4100,8 +4100,8 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `quota-exceeded.switch-preview-model` | boolean | Switches to preview model on quota errors. |
 | `oauth.providers.antigravity.antigravity-credits` | boolean | Uses Antigravity credits as last-resort Claude fallback. |
 | `routing.strategy` | string | `round-robin`, `weighted-round-robin`, or `fill-first`. |
-| `routing.session-affinity` | boolean | Universal session-sticky credential routing. |
-| `routing.session-affinity-ttl` | string | Session-to-auth binding duration. |
+| `routing.session-affinity` | boolean | Database-backed session-sticky credential routing, shared across Home nodes using the same database. Bindings survive config reloads and restarts; unavailable credentials may be reselected. Upgrade all Home nodes to enable cluster-wide consistency. |
+| `routing.session-affinity-ttl` | string | Session-to-auth idle timeout, renewed by successful dispatches. Default: `1h`. |
 | `oauth.providers.antigravity.signature-cache-enabled` | boolean pointer | Enables Antigravity thinking signature cache validation. |
 | `oauth.providers.antigravity.signature-bypass-strict` | boolean pointer | Controls strictness of Antigravity signature bypass. |
 | `oauth.providers.antigravity.sensitive-words` | array of string | Words to obfuscate with zero-width characters in system instructions. |

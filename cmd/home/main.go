@@ -102,6 +102,7 @@ func newRuntimeConcurrencyAdmitter(repo concurrencyAdmissionRepository, currentH
 				Home:        homeID,
 			},
 			ProtocolVersion: req.ProtocolVersion,
+			SessionAffinity: req.SessionAffinity,
 		})
 		return home.ConcurrencyAdmissionResult{Accounted: result.Accounted, CredentialID: result.CredentialID, Model: result.Model}, errAdmit
 	})

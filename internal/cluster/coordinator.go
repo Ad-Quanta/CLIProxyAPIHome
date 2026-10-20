@@ -211,6 +211,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
 	defer cancelCleanup()
 	go c.runLifecycleCleanupLoop(cleanupCtx)
+	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "session affinity", c.repo.PurgeExpiredSessionBindings)
+	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "kv store", c.repo.KVPurgeExpired)
 
 	heartbeatTicker := time.NewTicker(c.heartbeatInterval)
 	defer heartbeatTicker.Stop()
