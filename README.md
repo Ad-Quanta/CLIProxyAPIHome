@@ -76,6 +76,8 @@ Home now always runs from a database-backed runtime. When `cluster.yaml` is abse
 
 When `cluster.yaml` exists, Home enables cluster mode and uses the database backend declared in that file. Copy `cluster.sqlite.example.yaml` or `cluster.pgsql.example.yaml` to `cluster.yaml` as a starting point. PostgreSQL accepts either individual connection fields or a connection string in `pgsql.postgres_uri`. SQLite supports only one active Home process per database; deployments with multiple active Homes must use PostgreSQL. Multiple CPA nodes may connect to a single SQLite-backed Home. When using SQLite with `cluster.yaml`, configure `node.external-ip` so CPA clients can reach the Home.
 
+Before using automatic CPA connection rebalancing, upgrade all Home nodes to a version that supports it. Automatic rebalancing is not guaranteed while old and new Home versions coexist.
+
 Set `slow-query-threshold` under the selected `pgsql` or `sqlite` backend to control slow SQL logging. It accepts Go duration strings such as `"500ms"` or `"1s"` and defaults to `"200ms"`.
 
 `config.yaml` and `auth-dir` are no longer runtime storage. They are import/export exchange formats only. To migrate an existing local setup into the database, run:

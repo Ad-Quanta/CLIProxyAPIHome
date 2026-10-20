@@ -196,6 +196,9 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 						cancel()
 						return
 					}
+					if errSend := s.writeRebalanceInstruction(runCtx, tracked.Lifetime(), writer); errSend != nil {
+						log.Debugf("failed to publish rebalance instruction: %v", errSend)
+					}
 				}
 			}
 		}()
@@ -547,6 +550,20 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				}
 				if s.cluster == nil {
 					_ = writer.WriteRedisError("ERR cluster disabled")
+					return
+				}
+				if len(args) >= 2 && strings.EqualFold(args[1], "BALANCE") {
+					handler, supported := s.cluster.(clusterRebalanceHandler)
+					if !supported {
+						_ = writer.WriteRedisError("ERR cluster rebalance unsupported")
+						return
+					}
+					payload, errRebalance := handler.HandleRebalance(connectionCtx, tracked.Lifetime(), args)
+					if errRebalance != nil {
+						_ = writer.WriteRedisError(cluster.FormatRESPError(errRebalance))
+						return
+					}
+					_ = writer.WriteRedisBulkString(payload)
 					return
 				}
 				payload, errCluster := s.cluster.Handle(connectionCtx, args, clientIP)
