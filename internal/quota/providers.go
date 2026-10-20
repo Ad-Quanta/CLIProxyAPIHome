@@ -29,20 +29,32 @@ func (c *Collector) probeClaude(ctx context.Context, auth *coreauth.Auth) (probe
 	if errParse != nil || len(windows) == 0 {
 		return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "Claude quota response did not contain usable windows.", retryable: true}
 	}
-	result := probeResult{windows: windows, replaceWindows: true, replacePlan: true}
+	result := probeResult{windows: windows, replaceWindows: true}
 	profileBody, _, errProfile := c.probeRequest(ctx, auth, http.MethodGet, c.options.ClaudeProfileURL, nil, headers)
 	if errProfile != nil {
 		result.partial = true
 		result.collectionError = probeCollectionError(errProfile, c.options.Now().UTC())
-		return result, nil
-	}
-	if !validClaudeProfile(profileBody) {
+	} else if !validClaudeProfile(profileBody) {
 		profileError := &probeError{code: "PROFILE_RESPONSE_INVALID", message: "Claude profile response could not be parsed.", retryable: true}
 		result.partial = true
 		result.collectionError = probeCollectionError(profileError, c.options.Now().UTC())
-		return result, nil
+	} else {
+		result.plan = parseClaudeProfilePlan(profileBody)
+		result.replacePlan = result.plan != nil
 	}
-	result.plan = parseClaudeProfilePlan(profileBody)
+
+	// Claude Code reads reset grants separately so the normal usage response still
+	// includes spend data. This request only observes grants; it never consumes one.
+	result.replaceResetCredits = true
+	resetCredits, errReset := c.probeClaudeResetCredits(ctx, auth, headers)
+	if errReset != nil {
+		result.partial = true
+		if result.collectionError == nil {
+			result.collectionError = probeCollectionError(errReset, c.options.Now().UTC())
+		}
+	} else {
+		result.resetCredits = resetCredits
+	}
 	return result, nil
 }
 
