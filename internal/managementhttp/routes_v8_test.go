@@ -78,6 +78,9 @@ func TestManagementV8QuotaRoutesRemainAvailable(t *testing.T) {
 						t.Fatalf("credential handler = %s, want %s", route.Handler, wantHandler)
 					}
 				}
+				if database && route.Method == http.MethodGet && route.Path == "/v8/management/credentials/models" && !strings.Contains(route.Handler, "GetCredentialModelsV8") {
+					t.Fatalf("v8 models route must include exclusion candidates, got %s", route.Handler)
+				}
 			}
 			for _, route := range []string{
 				"GET /credentials",

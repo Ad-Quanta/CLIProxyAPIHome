@@ -29,17 +29,31 @@ func (c *Collector) probeClaude(ctx context.Context, auth *coreauth.Auth) (probe
 	if errParse != nil || len(windows) == 0 {
 		return probeResult{}, &probeError{code: "UPSTREAM_RESPONSE_INVALID", message: "Claude quota response did not contain usable windows.", retryable: true}
 	}
-	result := probeResult{windows: windows, replaceWindows: true, replacePlan: true}
+	result := probeResult{windows: windows, replaceWindows: true}
 	profileBody, _, errProfile := c.probeRequest(ctx, auth, http.MethodGet, c.options.ClaudeProfileURL, nil, headers)
 	if errProfile != nil {
 		result.partial = true
 		result.collectionError = probeCollectionError(errProfile, c.options.Now().UTC())
-		return result, nil
-	}
-	if !validClaudeProfile(profileBody) {
+	} else if !validClaudeProfile(profileBody) {
 		profileError := &probeError{code: "PROFILE_RESPONSE_INVALID", message: "Claude profile response could not be parsed.", retryable: true}
 		result.partial = true
 		result.collectionError = probeCollectionError(profileError, c.options.Now().UTC())
+	} else {
+		result.plan = parseClaudeProfilePlan(profileBody)
+		result.replacePlan = result.plan != nil
+	}
+
+	// Claude Code reads reset grants separately so the normal usage response still
+	// includes spend data. This request only observes grants; it never consumes one.
+	result.replaceResetCredits = true
+	resetCredits, errReset := c.probeClaudeResetCredits(ctx, auth, headers)
+	if errReset != nil {
+		result.partial = true
+		if result.collectionError == nil {
+			result.collectionError = probeCollectionError(errReset, c.options.Now().UTC())
+		}
+	} else {
+		result.resetCredits = resetCredits
 	}
 	return result, nil
 }
@@ -405,6 +419,69 @@ func validClaudeProfile(body []byte) bool {
 		Organization map[string]any `json:"organization"`
 	}
 	return json.Unmarshal(body, &payload) == nil && (payload.Account != nil || payload.Organization != nil)
+}
+
+func claudeProfileBool(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case float64:
+		return typed != 0, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "y", "on":
+			return true, true
+		case "false", "0", "no", "n", "off":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func parseClaudeProfilePlan(body []byte) *cluster.QuotaPlan {
+	var payload struct {
+		Account      map[string]any `json:"account"`
+		Organization map[string]any `json:"organization"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return nil
+	}
+
+	rateLimitTier := strings.ToLower(quotaMetadataString(payload.Organization, "rate_limit_tier", "rateLimitTier"))
+	if strings.Contains(rateLimitTier, "max_20x") {
+		return &cluster.QuotaPlan{Name: "Max 20x", Premium: true}
+	}
+	if strings.Contains(rateLimitTier, "max_5x") {
+		return &cluster.QuotaPlan{Name: "Max 5x", Premium: true}
+	}
+
+	orgType := strings.ToLower(quotaMetadataString(payload.Organization, "organization_type", "organizationType"))
+	subStatus := strings.ToLower(quotaMetadataString(payload.Organization, "subscription_status", "subscriptionStatus"))
+	if subStatus == "" || subStatus == "active" {
+		switch orgType {
+		case "claude_team", "team":
+			return &cluster.QuotaPlan{Name: "Team"}
+		case "claude_enterprise", "enterprise":
+			return &cluster.QuotaPlan{Name: "Enterprise", Premium: true}
+		case "claude_max", "max":
+			return &cluster.QuotaPlan{Name: "Max", Premium: true}
+		case "claude_pro", "pro":
+			return &cluster.QuotaPlan{Name: "Pro", Premium: true}
+		}
+	}
+
+	hasMax, maxSet := claudeProfileBool(payload.Account["has_claude_max"])
+	if maxSet && hasMax {
+		return &cluster.QuotaPlan{Name: "Max", Premium: true}
+	}
+	hasPro, proSet := claudeProfileBool(payload.Account["has_claude_pro"])
+	if proSet && hasPro {
+		return &cluster.QuotaPlan{Name: "Pro", Premium: true}
+	}
+	if maxSet && proSet && !hasMax && !hasPro {
+		return &cluster.QuotaPlan{Name: "Free"}
+	}
+	return nil
 }
 
 type antigravityPayload struct {

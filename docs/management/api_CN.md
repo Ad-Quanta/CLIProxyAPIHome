@@ -2126,9 +2126,16 @@ Query 参数：
       "type": "codex",
       "owned_by": "openai"
     }
+  ],
+  "exclusion_models": [
+    {"id": "gpt-5.5", "display_name": "GPT-5.5", "type": "codex", "owned_by": "openai"}
   ]
 }
 ```
+
+`models` 是凭据当前已注册的客户端可见模型 ID，已经应用排除规则、OAuth 别名和前缀。该列表用于查看实际路由模型，不应用于生成排除规则。
+
+`exclusion_models` 是当前 Home 节点在上述转换之前保存的候选模型快照，包含已被排除的模型。条目结构与 `models` 相同，其中 `id` 是 `excluded_models` 实际匹配的 ID。即使所有候选模型都已被排除，该列表仍保留。没有候选快照时返回 `null`（例如凭据已禁用，或该 Provider 路径不应用凭据排除规则）；空数组表示已知的空候选列表。旧版 Home 不返回该字段。候选列表不可用时，客户端应保留手动规则编辑，不得使用 `models` 代替。此字段仅添加到 v8，旧版 v0 响应不变。
 
 ### GET `/credentials/model-states` 与 `/credentials/:credential_id/model-states`
 
@@ -2991,6 +2998,8 @@ collector 直接读取 DB 凭证，不接受 HMC 提交 URL。探测前会重新
   "generated_at": "2026-07-16T01:01:00Z"
 }
 ```
+
+Claude 的套餐信息来自 `/api/oauth/profile`；资料请求失败或未识别出套餐时，保留上次已知套餐。重置次数通过独立的 `GET /api/oauth/usage?cedar_ember=1&skip_spend=1` 读取。账号符合资格且 grant 列表有效时，`reset_credits.available_count` 汇总已开始、未过期且未暂停的 grant 剩余重置次数。它表示剩余次数，不代表当前使用量下可以立即执行重置。Claude 的 grant 可包含多次重置，不等同于 Codex 的单次 credit，因此 `credits` 数组为空。上游未报告或账号不符合资格时返回 `reset_credits: null`；重置请求失败或数据格式无效时，清除旧的重置观测并将采集状态标记为 `partial`，保留成功采集的窗口和套餐信息。Home 仅查询这些信息，不会消费重置 grant。
 
 Provider 未报告该能力或没有可靠观测时，`reset_credits` 为 `null`。该字段只在详情响应中提供，不包含在 `GET /quota/credentials` 列表项里。`available_count` 是 Provider 最近一次报告的当前可用次数，`observed_at` 是该次 reset-credit 观测时间，`credits` 是经过数量限制并按过期时间排序的当前可用 Codex rate-limit reset credit 列表。usage 汇总提供正数次数、但独立详情请求失败时，`available_count` 保持本次最新值，`credits` 为空且 `collection_status=partial`；旧数量和已过期详情不会继续表现为当前数据。credit 条目只暴露状态和时间元数据，不返回 Provider 的 reset-credit 标识。该 endpoint 只读，不会消费 reset credit。
 

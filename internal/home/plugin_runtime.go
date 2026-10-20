@@ -237,14 +237,11 @@ func (r *Runtime) tryRegisterPluginModelsForAuth(ctx context.Context, auth *home
 	}
 
 	models := pluginModelsToHomeModels(result.Models)
+	candidates := append([]*ModelInfo{}, models...)
 	models = applyExcludedModels(models, activeExcluded)
 	models = applyOAuthModelAlias(cfg, providerKey, activeAuthKind, models)
-	if len(models) > 0 {
-		forcePrefix := cfg != nil && cfg.ForceModelPrefix
-		r.registerResolvedModelsForAuth(activeAuth, providerKey, applyModelPrefixes(models, activeAuth.Prefix, forcePrefix))
-		return true
-	}
-	registry.GetGlobalRegistry().UnregisterClient(activeAuth.ID)
+	forcePrefix := cfg != nil && cfg.ForceModelPrefix
+	r.registerResolvedModelsForAuth(activeAuth, providerKey, applyModelPrefixes(models, activeAuth.Prefix, forcePrefix), candidates)
 	return true
 }
 
