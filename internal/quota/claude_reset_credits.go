@@ -13,6 +13,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
 
+const claudeResetCreditsUserAgent = "claude-cli/2.1.304 (external, cli)"
+
 func (c *Collector) probeClaudeResetCredits(ctx context.Context, auth *coreauth.Auth, headers http.Header) (*cluster.QuotaResetCredits, *probeError) {
 	target, errURL := url.Parse(c.options.ClaudeUsageURL)
 	if errURL != nil {
@@ -22,7 +24,9 @@ func (c *Collector) probeClaudeResetCredits(ctx context.Context, auth *coreauth.
 	query.Set("cedar_ember", "1")
 	query.Set("skip_spend", "1")
 	target.RawQuery = query.Encode()
-	body, _, errRequest := c.probeRequest(ctx, auth, http.MethodGet, target.String(), nil, headers)
+	resetHeaders := headers.Clone()
+	resetHeaders.Set("User-Agent", claudeResetCreditsUserAgent)
+	body, _, errRequest := c.probeRequest(ctx, auth, http.MethodGet, target.String(), nil, resetHeaders)
 	if errRequest != nil {
 		return nil, errRequest
 	}
@@ -38,7 +42,10 @@ func (c *Collector) probeClaudeResetCredits(ctx context.Context, auth *coreauth.
 // A grant can cover multiple resets, so it is not a Codex-style individual credit.
 func parseClaudeResetCredits(body []byte, observedAt time.Time) (*cluster.QuotaResetCredits, error) {
 	var payload struct {
-		Grants *struct {
+		FiveHour   json.RawMessage `json:"five_hour"`
+		SevenDay   json.RawMessage `json:"seven_day"`
+		ExtraUsage json.RawMessage `json:"extra_usage"`
+		Grants     *struct {
 			Eligible         *bool  `json:"eligible"`
 			IneligibleReason string `json:"ineligible_reason"`
 			Grants           []struct {
@@ -54,6 +61,9 @@ func parseClaudeResetCredits(body []byte, observedAt time.Time) (*cluster.QuotaR
 		return nil, fmt.Errorf("decode Claude reset grants: %w", errDecode)
 	}
 	if payload.Grants == nil {
+		if len(payload.FiveHour)+len(payload.SevenDay)+len(payload.ExtraUsage) == 0 {
+			return nil, fmt.Errorf("Claude reset response does not contain usage data")
+		}
 		return nil, nil
 	}
 	status := payload.Grants

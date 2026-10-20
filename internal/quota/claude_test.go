@@ -52,6 +52,9 @@ func TestParseClaudeResetCredits(t *testing.T) {
 		invalid bool
 	}{
 		{"not reported", `{"five_hour":{"utilization":10}}`, 0, true, false},
+		{"explicit null", `{"five_hour":null,"cedar_ember":null}`, 0, true, false},
+		{"empty response", `{}`, 0, false, true},
+		{"in-band error", `{"error":"unavailable"}`, 0, false, true},
 		{"not eligible", `{"cedar_ember":{"eligible":false}}`, 0, true, false},
 		{"zero", `{"cedar_ember":{"eligible":true,"grants":[]}}`, 0, false, false},
 		{"remaining before limit", `{"cedar_ember":{"eligible":true,"grants":[{"id":"full","resets_left":2,"usable_now":false,"use_requires_limit":true},{"id":"session","resets_left":1}]}}`, 3, false, false},
@@ -101,7 +104,8 @@ func TestClaudePartialRefreshPreservesPlanAndReplacesResetObservation(t *testing
 		{"profile rate limited", "", 429, 200, `{"cedar_ember":{"eligible":true,"grants":[{"id":"grant","resets_left":2}]}}`, true, true},
 		{"profile invalid", `{"error":"invalid"}`, 200, 200, `{"cedar_ember":{"eligible":true,"grants":[{"id":"grant","resets_left":2}]}}`, true, true},
 		{"profile unknown and reset fails", `{"account":{}}`, 200, 429, "", false, true},
-		{"reset not reported", `{"account":{}}`, 200, 200, `{}`, false, false},
+		{"reset not reported", `{"account":{}}`, 200, 200, `{"five_hour":null}`, false, false},
+		{"reset response invalid", `{"account":{}}`, 200, 200, `{"error":"unavailable"}`, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo := newCollectorTestRepository(t)
@@ -128,6 +132,9 @@ func TestClaudePartialRefreshPreservesPlanAndReplacesResetObservation(t *testing
 					w.WriteHeader(test.profileCode)
 					_, _ = w.Write([]byte(test.profile))
 				} else if request.URL.Query().Get("cedar_ember") == "1" {
+					if request.Header.Get("User-Agent") != claudeResetCreditsUserAgent {
+						t.Error("reset observation must identify the supported Claude CLI protocol")
+					}
 					if request.URL.Query().Get("skip_spend") != "1" {
 						t.Error("reset observation must use the read-only usage request")
 					}
