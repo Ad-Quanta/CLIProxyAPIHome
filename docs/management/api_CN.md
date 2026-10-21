@@ -4085,7 +4085,7 @@ Query 参数：
 | `observability.pprof.addr` | string | pprof listen address。 |
 | `server.commercial-mode` | boolean | 高并发下减少高开销 middleware 行为。 |
 | `observability.logs.logging-to-file` | boolean | 将 app logs 写入文件而非 stdout。 |
-| `observability.logs.logs-max-total-size-mb` | integer | 日志文件总大小上限；`0` 禁用清理。 |
+| `observability.logs.logs-max-total-size-mb` | integer | 每台 Home 和 CPA 节点各自的本地日志文件总大小上限（MB）；`0` 禁用清理。每台 Home 启动时及之后每分钟读取集群同步后的最新配置，检查自己的 `logs/` 目录，优先删除最旧的 `.log`/`.log.gz` 文件。不限制数据库记录或容器 stdout 日志。 |
 | `observability.logs.error-logs-max-files` | integer | request error log 文件保留数量。 |
 | `plugins.enabled` | boolean | 在 Home 和下游 CPA 节点启用受信任的进程内插件。 |
 | `plugins.dir` | string | 每个节点本地插件产物目录。 |
