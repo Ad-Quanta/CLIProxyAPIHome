@@ -2762,7 +2762,12 @@ When an observation is joined to a policy in `/credentials/in-flight`, `/credent
 
 ### Credential concurrency policy and limiter routes
 
-Before activating a policy, follow the [strict credential concurrency limits deployment runbook](../README.md). It defines the required topology, capability checks, certificate identities, and fail-closed mixed-version rollout.
+Before activating a policy:
+
+- Use only one active Home per SQLite database; multiple active Homes require PostgreSQL, even when all limits are disabled.
+- Give each Home and CPA node its own mTLS certificate and private key. Do not share identities between nodes or reuse an identity for a replacement node.
+- Keep all limits disabled while upgrading every Home and CPA. Confirm old processes are stopped, every active CPA membership uses protocol version `1`, and authenticated `GET /capabilities` on each live Home returns `capabilities.credential_concurrency_limits_v2: true`.
+- Active policies are unsupported with legacy CPAs or old/capability-missing Homes. Remove those nodes from service and remove or fence their memberships/incarnations before enabling or continuing policies; never bypass these checks through direct database writes.
 
 The policy route groups are `GET /credentials/concurrency-policies`, `GET /credentials/:credential_id/concurrency-policy` plus `PATCH /credentials/:credential_id/concurrency-policy`, and `GET /credentials/concurrency`. The first two read stored policy; the patch replaces only supplied fields; the final route reads policy plus the authoritative admitted-counter state. `PATCH /credentials/fields` is the auth-files compatibility form of the same policy patch.
 

@@ -2760,7 +2760,12 @@ DELETE /credentials/credential-db-id/cooldown?model=gpt-5
 
 ### Credential concurrency policy 和 limiter 路由
 
-启用 policy 前，必须遵循[严格凭证并发限制部署运行手册](../CN.md)。手册规定所需拓扑、capability 检查、certificate identity 和 fail-closed mixed-version 发布方式。
+启用 policy 前：
+
+- 每个 SQLite 数据库只能有一个 active Home；多个 active Home 必须使用 PostgreSQL，即使所有 limit 均已关闭。
+- 每个 Home 和 CPA 节点必须使用独立的 mTLS certificate 和 private key；不得在节点间共享身份，也不得为替换节点复用身份。
+- 升级全部 Home 和 CPA 期间保持所有 limit 关闭。确认旧进程已停止、所有 active CPA membership 使用 protocol version `1`，且每个 live Home 经认证的 `GET /capabilities` 均返回 `capabilities.credential_concurrency_limits_v2: true`。
+- 存在 legacy CPA、旧 Home 或缺少 capability 的 Home 时，不支持 active policy。启用或继续使用 policy 前，必须将这些节点移出服务，并移除或 fence 对应的 membership/incarnation；不得通过直接修改数据库绕过检查。
 
 policy 路由组为 `GET /credentials/concurrency-policies`、`GET /credentials/:credential_id/concurrency-policy` 加 `PATCH /credentials/:credential_id/concurrency-policy`，以及 `GET /credentials/concurrency`。前两组读取已存储的 policy；PATCH 只替换明确提供的字段；最后一个路由读取 policy 和权威 admitted-counter state。`PATCH /credentials/fields` 是同一 policy patch 的 auth-files compatibility 形式。
 
