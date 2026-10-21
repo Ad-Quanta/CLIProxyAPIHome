@@ -4088,7 +4088,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `observability.pprof.addr` | string | pprof listen address. |
 | `server.commercial-mode` | boolean | Reduces high-overhead middleware behavior under high concurrency. |
 | `observability.logs.logging-to-file` | boolean | Writes app logs to files instead of stdout. |
-| `observability.logs.logs-max-total-size-mb` | integer | Total log file size limit in MB; `0` disables cleanup. |
+| `observability.logs.logs-max-total-size-mb` | integer | Per-node local log file size limit in MB for every Home and CPA node; `0` disables cleanup. Each Home checks its `logs/` directory at startup and every minute using the latest cluster-synchronized config, deleting the oldest `.log`/`.log.gz` files first. Does not limit database records or container stdout logs. |
 | `observability.logs.error-logs-max-files` | integer | Retained request error log file count. |
 | `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
 | `plugins.dir` | string | Local plugin artifact directory used by each node. |
