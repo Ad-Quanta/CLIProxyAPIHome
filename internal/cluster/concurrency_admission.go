@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/concurrency"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -55,6 +56,8 @@ type ConcurrencyAdmissionRequest struct {
 	Model           string
 	Lifetime        ConnectionLifetime
 	ProtocolVersion int
+	// SessionAffinity must commit atomically with admission when present.
+	SessionAffinity *coreauth.SessionAffinityCommit
 }
 
 // ConcurrencyAdmissionResult describes the canonical credential and model admitted by the limiter.
@@ -181,6 +184,19 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 		}
 		waitForConcurrencyAdmissionPolicyLock(ctx)
 
+		if req.SessionAffinity != nil {
+			if req.SessionAffinity.AuthID != credentialID {
+				return fmt.Errorf("session affinity credential does not match admission")
+			}
+			swapped, errSwap := compareAndSwapSessionBindingTx(tx, *req.SessionAffinity)
+			if errSwap != nil {
+				return errSwap
+			}
+			if !swapped {
+				return coreauth.ErrSessionAffinityConflict
+			}
+		}
+
 		credentialLimit := positiveLimit(policy.MaxInFlight)
 		modelLimit := positiveLimitValue(models[model])
 		if credentialLimit == 0 && modelLimit == 0 {
@@ -206,6 +222,9 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 		result.Accounted = true
 		return nil
 	})
+	if errTransaction != nil {
+		result.Accounted = false
+	}
 	return result, errTransaction
 }
 

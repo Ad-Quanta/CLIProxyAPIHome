@@ -4102,8 +4102,8 @@ Query 参数：
 | `quota-exceeded.switch-preview-model` | boolean | Quota error 时切换到 preview model。 |
 | `oauth.providers.antigravity.antigravity-credits` | boolean | Claude 最后兜底使用 Antigravity credits。 |
 | `routing.strategy` | string | `round-robin`、`weighted-round-robin` 或 `fill-first`。 |
-| `routing.session-affinity` | boolean | 通用 session-sticky credential routing。 |
-| `routing.session-affinity-ttl` | string | Session-to-auth binding 持续时间。 |
+| `routing.session-affinity` | boolean | 数据库支持的会话粘性凭证路由，使用同一数据库的 Home 节点共享绑定。绑定保留至空闲过期，不因配置重载或进程重启丢失；凭证不可用时可重新选择。需升级所有 Home 节点才能保证集群一致性。 |
+| `routing.session-affinity-ttl` | string | 会话与凭证绑定的空闲超时，成功派发后续期，默认 `1h`。 |
 | `oauth.providers.antigravity.signature-cache-enabled` | boolean pointer | 启用 Antigravity thinking signature cache validation。 |
 | `oauth.providers.antigravity.signature-bypass-strict` | boolean pointer | 控制 Antigravity signature bypass 严格程度。 |
 | `oauth.providers.antigravity.sensitive-words` | array of string | 在 system instructions 中使用零宽字符混淆的敏感词列表。 |
