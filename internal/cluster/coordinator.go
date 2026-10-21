@@ -111,7 +111,7 @@ func (c *Coordinator) Initialize(ctx context.Context) error {
 	if _, errEnsure := c.repo.EnsureLifecycleConfig(ctx, c.heartbeatTimeout); errEnsure != nil {
 		return errEnsure
 	}
-	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2"})
+	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2", rebalanceCapability})
 	if errRegister != nil {
 		return errRegister
 	}
@@ -211,6 +211,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
 	defer cancelCleanup()
 	go c.runLifecycleCleanupLoop(cleanupCtx)
+	go c.runRebalanceLoop(cleanupCtx)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "session affinity", c.repo.PurgeExpiredSessionBindings)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "kv store", c.repo.KVPurgeExpired)
 
@@ -427,6 +428,16 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 		}
 		sortClusterNodes(liveNodes)
 		elected = liveNodes[0]
+		masterKey := rebalanceHomeKey(HomeIncarnationID{IP: elected.IP, Port: elected.Port, StartedAt: elected.StartedAt})
+		if gate.MasterKey != masterKey || !now.Before(gate.LeaseUntil) {
+			gate.Term++
+			gate.LastBalanceAt = time.Time{}
+		}
+		gate.MasterKey = masterKey
+		gate.LeaseUntil = elected.LastSeenAt.Add(c.heartbeatTimeout)
+		if errGate := tx.Save(&gate).Error; errGate != nil {
+			return errGate
+		}
 		if errClear := tx.Model(&ClusterNodeRecord{}).Where("is_master = ?", true).Update("is_master", false).Error; errClear != nil {
 			return errClear
 		}

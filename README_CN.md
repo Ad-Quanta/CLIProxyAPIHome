@@ -76,6 +76,8 @@ Home 现在始终使用数据库驱动的运行时。没有 `cluster.yaml` 时�
 
 存在 `cluster.yaml` 时，Home 启用集群模式，并使用该文件中声明的数据库后端。可以复制 `cluster.sqlite.example.yaml` 或 `cluster.pgsql.example.yaml` 为 `cluster.yaml` 后再修改。PostgreSQL 既支持拆分连接字段，也支持在 `pgsql.postgres_uri` 中填写连接字符串。SQLite 每个数据库仅支持一个 active Home 进程；多 Home 部署必须使用 PostgreSQL。多个 CPA 节点可以连接同一个使用 SQLite 的 Home。SQLite 使用 `cluster.yaml` 时，请配置 `node.external-ip`，确保 CPA 客户端可以访问 Home。
 
+使用 CPA 自动连接均衡前，请先将所有 Home 节点升级到支持该功能的版本；新旧 Home 混合运行期间不保证自动均衡效果。
+
 可以在所选的 `pgsql` 或 `sqlite` 后端下设置 `slow-query-threshold`，控制慢 SQL 日志阈值。该字段接受 `"500ms"`、`"1s"` 等 Go duration 字符串，默认为 `"200ms"`。
 
 `config.yaml` 和 `auth-dir` 不再是运行时存储，只作为导入/导出的交换格式。迁移已有本地配置时，先运行：
