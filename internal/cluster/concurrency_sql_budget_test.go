@@ -1,11 +1,70 @@
 package cluster
 
 import (
+	"fmt"
 	"testing"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestReadConcurrencyStateSQLBudgets(t *testing.T) {
+	for _, backend := range []struct {
+		name string
+		open func(*testing.T) *Repository
+	}{
+		{"sqlite", newCredentialFoundationTestRepository},
+		{"postgres", newPostgresQuiescenceRepository},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			for _, credentialCount := range []int{0, 1, 100} {
+				t.Run(fmt.Sprintf("%d credentials", credentialCount), func(t *testing.T) {
+					repo := backend.open(t)
+					for index := credentialCount - 1; index >= 0; index-- {
+						credentialID := fmt.Sprintf("cred-%03d", index)
+						seedConcurrencyAdmissionPolicy(t, repo, credentialID, int64Pointer(10), map[string]int64{
+							"zeta": 4, "gpt": 3, "claude": 2, "absent": 1,
+						})
+						for _, model := range []string{"zeta", "gpt", "claude", "unconfigured"} {
+							for _, fingerprint := range []string{"fp-a", "fp-b"} {
+								seedReleaseCounter(t, repo, credentialID, model, fingerprint, 1, 0)
+							}
+						}
+					}
+					counter := &lifecycleSQLCounter{Interface: logger.Default.LogMode(logger.Silent)}
+					repo.db = repo.db.Session(&gorm.Session{Logger: counter})
+					states, errRead := repo.ReadConcurrencyState(t.Context())
+					if errRead != nil || len(states) != credentialCount {
+						t.Fatalf("states=(%#v,%v)", states, errRead)
+					}
+					wantSQL := int64(3)
+					if credentialCount == 0 {
+						wantSQL = 1
+					}
+					if count := counter.statements.Load(); count != wantSQL {
+						t.Fatalf("state SQL statements=%d, want %d", count, wantSQL)
+					}
+					for index, state := range states {
+						if state.CredentialID != fmt.Sprintf("cred-%03d", index) || state.AdmittedInFlight != 8 || len(state.Models) != 4 {
+							t.Fatalf("state=%#v", state)
+						}
+						for modelIndex, model := range []string{"absent", "claude", "gpt", "zeta"} {
+							wantCount := int64(2)
+							if model == "absent" {
+								wantCount = 0
+							}
+							want := CredentialConcurrencyModelState{Model: model, MaxInFlight: int64(modelIndex + 1), AdmittedInFlight: wantCount}
+							if state.Models[modelIndex] != want {
+								t.Fatalf("model=%#v, want %#v", state.Models[modelIndex], want)
+							}
+						}
+					}
+					t.Logf("%d credentials with 4 model policies each: %d business SQL statements", credentialCount, wantSQL)
+				})
+			}
+		})
+	}
+}
 
 func TestConcurrencySQLBudgets(t *testing.T) {
 	for _, backend := range []struct {

@@ -359,32 +359,62 @@ func (r *Repository) ReadConcurrencyState(ctx context.Context) ([]CredentialConc
 		if errPolicies := tx.WithContext(contextOrBackground(ctx)).Order("credential_id ASC").Find(&policies).Error; errPolicies != nil {
 			return errPolicies
 		}
+		if len(policies) == 0 {
+			return nil
+		}
+
+		var modelPolicies []CredentialConcurrencyModelPolicyRecord
+		if errModels := tx.Find(&modelPolicies).Error; errModels != nil {
+			return errModels
+		}
+		modelsByCredential := make(map[string][]CredentialConcurrencyModelPolicyRecord, len(policies))
+		for _, modelPolicy := range modelPolicies {
+			modelsByCredential[modelPolicy.CredentialID] = append(modelsByCredential[modelPolicy.CredentialID], modelPolicy)
+		}
+
+		var counts []struct {
+			CredentialID string
+			Model        string
+			Minimum      int64
+			ActiveCount  int64
+		}
+		// Exclude counters without a policy before aggregating, including invalid orphan counters.
+		errCounts := tx.Model(&CredentialConcurrencyCounterRecord{}).
+			Where("credential_id IN (?)", tx.Model(&CredentialConcurrencyPolicyRecord{}).Select("credential_id")).
+			Select("credential_id, model, MIN(active_count) AS minimum, SUM(active_count) AS active_count").
+			Group("credential_id, model").Scan(&counts).Error
+		if errCounts != nil {
+			return errCounts
+		}
+		totals := make(map[string]int64, len(policies))
+		countsByModel := make(map[string]map[string]int64, len(policies))
+		for _, count := range counts {
+			// MIN detects negatives hidden by a positive sum; check cross-model overflow in Go.
+			if count.Minimum < 0 || count.ActiveCount < 0 || totals[count.CredentialID] > math.MaxInt64-count.ActiveCount {
+				return ErrConcurrencyCounterInvalid
+			}
+			totals[count.CredentialID] += count.ActiveCount
+			if countsByModel[count.CredentialID] == nil {
+				countsByModel[count.CredentialID] = make(map[string]int64)
+			}
+			countsByModel[count.CredentialID][count.Model] = count.ActiveCount
+		}
+
+		states = make([]CredentialConcurrencyState, 0, len(policies))
 		for _, policy := range policies {
-			models, errModels := loadCredentialConcurrencyModels(tx.WithContext(contextOrBackground(ctx)), policy.CredentialID, false)
-			if errModels != nil {
-				return errModels
-			}
-			credentialActive, _, errCounts := sumConcurrencyCountsTx(ctx, tx, policy.CredentialID, "")
-			if errCounts != nil {
-				return errCounts
-			}
+			models := modelsByCredential[policy.CredentialID]
 			state := CredentialConcurrencyState{
-				CredentialID: policy.CredentialID, MaxInFlight: cloneInt64(policy.MaxInFlight), AdmittedInFlight: credentialActive,
+				CredentialID: policy.CredentialID, MaxInFlight: cloneInt64(policy.MaxInFlight), AdmittedInFlight: totals[policy.CredentialID],
 				PolicyVersion: policy.Version, EffectiveAt: policy.EffectiveAt, ObservationBarrier: policy.ObservationBarrierRevision,
 				Models: make([]CredentialConcurrencyModelState, 0, len(models)),
 			}
-			modelKeys := make([]string, 0, len(models))
-			for model := range models {
-				modelKeys = append(modelKeys, model)
+			for _, modelPolicy := range models {
+				state.Models = append(state.Models, CredentialConcurrencyModelState{
+					Model: modelPolicy.Model, MaxInFlight: modelPolicy.MaxInFlight,
+					AdmittedInFlight: countsByModel[policy.CredentialID][modelPolicy.Model],
+				})
 			}
-			sort.Strings(modelKeys)
-			for _, model := range modelKeys {
-				_, modelActive, errModelCounts := sumConcurrencyCountsTx(ctx, tx, policy.CredentialID, model)
-				if errModelCounts != nil {
-					return errModelCounts
-				}
-				state.Models = append(state.Models, CredentialConcurrencyModelState{Model: model, MaxInFlight: models[model], AdmittedInFlight: modelActive})
-			}
+			sort.Slice(state.Models, func(i, j int) bool { return state.Models[i].Model < state.Models[j].Model })
 			states = append(states, state)
 		}
 		return nil
