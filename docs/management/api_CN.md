@@ -3495,6 +3495,8 @@ Query 参数：
 
 ### GET `/models?scope=available|static`
 
+可用模型在 v8 响应中额外包含 `billing_models`，元素为 `{"provider": "z-ai", "model": "glm-5.3-flash"}`。这些计价身份按凭证使用实际调度解析器生成，去重后按供应商和模型排序。公开 `id`（例如 `team/MY-MODEL`）可能对应多个上游模型，同一供应商下也可能存在多个映射。模型价格编辑器应使用这些组合，不能把公开别名或合并后的 `name` 当作计价模型。空数组表示未解析到可靠身份，不应回退猜测。静态模型和旧版响应不含该字段，可继续使用原有 `(providers[], id)` 候选。此元数据不会修改已有价格规则或历史账单。
+
 从当前 runtime registry 或静态模型目录返回模型定义。
 
 每个模型都包含 `providers`，其值是 `usage.provider` 和 Billing 模型价格规则使用的权威

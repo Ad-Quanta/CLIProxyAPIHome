@@ -3501,10 +3501,17 @@ Response: file attachment.
 Returns model definitions from either the current runtime registry or the static model catalog.
 
 Each model includes `providers`, the authoritative provider identifiers used by `usage.provider`
-and Billing model-price rules. Clients must create one candidate per `(provider, model)` pair and
-must not derive Billing providers from `type`, `owned_by`, or a static catalog group name.
-Clients must omit model records whose `providers` field is absent or empty because they do not have
-a safe Billing identity.
+and Billing model-price rules. Available v8 models additionally include `billing_models`, an array
+of `{"provider": "z-ai", "model": "glm-5.3-flash"}` execution identities resolved per credential.
+A public `id` such as `team/MY-MODEL` can map to multiple upstream models, including multiple models
+under the same provider. Billing editors must use these pairs instead of the public `id` or the
+merged display `name`. Targets are unique and sorted by provider/model; an empty array means no
+billing identity could be resolved and must not be replaced with an alias-based guess.
+
+Static models and older responses omit `billing_models`; clients can retain their existing
+`(providers[], id)` candidates for those responses. Clients must not derive Billing providers from
+`type`, `owned_by`, or a static catalog group name, and must omit records without a safe Billing
+identity. This metadata does not rewrite existing price rules or historical charges.
 
 Provider implementations must register every executor identifier that can appear in
 `usage.provider` under the same normalized runtime registry provider key. Adding or renaming an
