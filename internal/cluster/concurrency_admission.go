@@ -272,27 +272,25 @@ func sumConcurrencyCountsTx(ctx context.Context, tx *gorm.DB, credentialID strin
 	if tx == nil {
 		return 0, 0, fmt.Errorf("database transaction is nil")
 	}
-	query := tx.WithContext(contextOrBackground(ctx)).Model(&CredentialConcurrencyCounterRecord{}).Where("credential_id = ?", credentialID)
-	var minimum int64
-	if errMinimum := query.Select("COALESCE(MIN(active_count), 0)").Scan(&minimum).Error; errMinimum != nil {
-		return 0, 0, errMinimum
+	var counts struct {
+		Minimum          int64
+		CredentialActive int64
+		ModelActive      int64
 	}
-	if minimum < 0 {
+	// Keep MIN independent of the sums so positive rows cannot hide invalid counters.
+	errCounts := tx.WithContext(contextOrBackground(ctx)).Model(&CredentialConcurrencyCounterRecord{}).
+		Where("credential_id = ?", credentialID).
+		Select(`COALESCE(MIN(active_count), 0) AS minimum,
+			COALESCE(SUM(active_count), 0) AS credential_active,
+			COALESCE(SUM(CASE WHEN model = ? THEN active_count ELSE 0 END), 0) AS model_active`, model).
+		Scan(&counts).Error
+	if errCounts != nil {
+		return 0, 0, errCounts
+	}
+	if counts.Minimum < 0 || counts.CredentialActive < 0 || counts.ModelActive < 0 {
 		return 0, 0, ErrConcurrencyCounterInvalid
 	}
-
-	var credentialActive int64
-	if errCredential := query.Select("COALESCE(SUM(active_count), 0)").Scan(&credentialActive).Error; errCredential != nil {
-		return 0, 0, errCredential
-	}
-	var modelActive int64
-	if errModel := query.Where("model = ?", model).Select("COALESCE(SUM(active_count), 0)").Scan(&modelActive).Error; errModel != nil {
-		return 0, 0, errModel
-	}
-	if credentialActive < 0 || modelActive < 0 {
-		return 0, 0, ErrConcurrencyCounterInvalid
-	}
-	return credentialActive, modelActive, nil
+	return counts.CredentialActive, counts.ModelActive, nil
 }
 
 func incrementConcurrencyCounterTx(ctx context.Context, tx *gorm.DB, credentialID string, model string, fingerprint string) error {
