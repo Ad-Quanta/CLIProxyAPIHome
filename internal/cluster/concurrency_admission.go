@@ -179,9 +179,17 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 		if errHook := recordConcurrencyContenderBackendPID(ctx, tx); errHook != nil {
 			return errHook
 		}
-		policy, models, errPolicy := lockConcurrencyPolicyTx(ctx, tx, credentialID)
+		policy, errPolicy := lockConcurrencyPolicyTx(ctx, tx, credentialID)
 		if errPolicy != nil {
 			return newAdmissionError("concurrency_tracker_unavailable", errPolicy)
+		}
+		var models map[string]int64
+		if policy.CredentialID != "" {
+			var errModels error
+			models, errModels = loadCredentialConcurrencyModels(tx.WithContext(contextOrBackground(ctx)), credentialID, true)
+			if errModels != nil {
+				return newAdmissionError("concurrency_tracker_unavailable", errModels)
+			}
 		}
 		waitForConcurrencyAdmissionPolicyLock(ctx)
 
@@ -229,29 +237,24 @@ func (r *Repository) AdmitCredentialConcurrency(ctx context.Context, req Concurr
 	return result, errTransaction
 }
 
-func lockConcurrencyPolicyTx(ctx context.Context, tx *gorm.DB, credentialID string) (CredentialConcurrencyPolicyRecord, map[string]int64, error) {
+// lockConcurrencyPolicyTx serializes admissions, releases, and model policy changes.
+// Policy writers must hold this parent row lock before changing model policies.
+func lockConcurrencyPolicyTx(ctx context.Context, tx *gorm.DB, credentialID string) (CredentialConcurrencyPolicyRecord, error) {
 	if tx == nil {
-		return CredentialConcurrencyPolicyRecord{}, nil, fmt.Errorf("database transaction is nil")
+		return CredentialConcurrencyPolicyRecord{}, fmt.Errorf("database transaction is nil")
 	}
 	credentialID = strings.TrimSpace(credentialID)
 	if credentialID == "" {
-		return CredentialConcurrencyPolicyRecord{}, nil, ErrConcurrencyCredentialNotFound
+		return CredentialConcurrencyPolicyRecord{}, ErrConcurrencyCredentialNotFound
 	}
 
 	policy := CredentialConcurrencyPolicyRecord{}
 	errPolicy := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
 		First(&policy, "credential_id = ?", credentialID).Error
 	if errors.Is(errPolicy, gorm.ErrRecordNotFound) {
-		return CredentialConcurrencyPolicyRecord{}, map[string]int64{}, nil
+		return CredentialConcurrencyPolicyRecord{}, nil
 	}
-	if errPolicy != nil {
-		return CredentialConcurrencyPolicyRecord{}, nil, errPolicy
-	}
-	models, errModels := loadCredentialConcurrencyModels(tx.WithContext(contextOrBackground(ctx)), credentialID, true)
-	if errModels != nil {
-		return CredentialConcurrencyPolicyRecord{}, nil, errModels
-	}
-	return policy, models, nil
+	return policy, errPolicy
 }
 
 func positiveLimit(value *int64) int64 {
@@ -301,28 +304,32 @@ func incrementConcurrencyCounterTx(ctx context.Context, tx *gorm.DB, credentialI
 		return ErrConcurrencyCounterInvalid
 	}
 
-	counter := CredentialConcurrencyCounterRecord{}
-	errCounter := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("credential_id = ? AND model = ? AND certificate_fingerprint = ?", credentialID, model, fingerprint).
-		First(&counter).Error
-	now, errNow := DatabaseNow(contextOrBackground(ctx), tx)
-	if errNow != nil {
-		return errNow
+	activeCount := clause.Column{Table: (CredentialConcurrencyCounterRecord{}).TableName(), Name: "active_count"}
+	now := gorm.Expr(strings.TrimPrefix(databaseNowQuery(tx), "SELECT "))
+	// The policy lock protects the preceding limit check. The conflict update
+	// preserves the cumulative release baseline and rejects invalid increments.
+	result := tx.WithContext(contextOrBackground(ctx)).Model(&CredentialConcurrencyCounterRecord{}).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "credential_id"}, {Name: "model"}, {Name: "certificate_fingerprint"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"active_count": gorm.Expr("? + 1", activeCount),
+				"updated_at":   now,
+			}),
+			Where: clause.Where{Exprs: []clause.Expression{
+				clause.Gte{Column: activeCount, Value: int64(0)},
+				clause.Lt{Column: activeCount, Value: int64(math.MaxInt64)},
+			}},
+		}).Create(map[string]any{
+		"credential_id": credentialID, "model": model, "certificate_fingerprint": fingerprint,
+		"active_count": int64(1), "last_release_seq": int64(0), "updated_at": now,
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	if errors.Is(errCounter, gorm.ErrRecordNotFound) {
-		return tx.WithContext(contextOrBackground(ctx)).Create(&CredentialConcurrencyCounterRecord{
-			CredentialID: credentialID, Model: model, CertificateFingerprint: fingerprint, ActiveCount: 1, UpdatedAt: now,
-		}).Error
-	}
-	if errCounter != nil {
-		return errCounter
-	}
-	if counter.ActiveCount < 0 || counter.ActiveCount == math.MaxInt64 {
+	if result.RowsAffected != 1 {
 		return ErrConcurrencyCounterInvalid
 	}
-	counter.ActiveCount++
-	counter.UpdatedAt = now
-	return tx.WithContext(contextOrBackground(ctx)).Save(&counter).Error
+	return nil
 }
 
 // CredentialConcurrencyState is the authoritative policy and admitted-count state for one credential.

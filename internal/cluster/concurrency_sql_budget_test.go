@@ -95,11 +95,27 @@ func TestConcurrencySQLBudgets(t *testing.T) {
 					t.Fatalf("%s admission=(%#v,%v)", phase, result, errAdmit)
 				}
 				// GORM traces business SQL, not database/sql Begin/Commit calls.
-				if count := counter.statements.Load(); count != 8 {
-					t.Fatalf("%s SQL statements=%d, want 8", phase, count)
+				if count := counter.statements.Load(); count != 6 {
+					t.Fatalf("%s SQL statements=%d, want 6", phase, count)
 				}
 			}
-			t.Log("aggregate: 1 SQL statement; limited admission: 8 business SQL statements")
+			release := ConcurrencyReleaseRequest{CredentialID: request.CredentialID, Model: request.Model, ReleaseSeq: 1, Lifetime: request.Lifetime}
+			for _, phase := range []struct {
+				name string
+				want int64
+			}{
+				{"apply release", 5},
+				{"duplicate release", 4},
+			} {
+				counter.statements.Store(0)
+				if errRelease := repo.ApplyConcurrencyRelease(t.Context(), release); errRelease != nil {
+					t.Fatalf("%s: %v", phase.name, errRelease)
+				}
+				if count := counter.statements.Load(); count != phase.want {
+					t.Fatalf("%s SQL statements=%d, want %d", phase.name, count, phase.want)
+				}
+			}
+			t.Log("aggregate: 1 SQL statement; limited admission: 6; release: 5; duplicate release: 4")
 		})
 	}
 }
