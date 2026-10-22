@@ -45,6 +45,7 @@ type Coordinator struct {
 	heartbeatTimeout  time.Duration
 	onMasterChanged   func(bool)
 	startupRecovery   StartupRecovery
+	snapshotRefresh   chan struct{}
 
 	mu               sync.RWMutex
 	masterCallbackMu sync.Mutex
@@ -90,6 +91,7 @@ func NewCoordinator(repo *Repository, node NodeIdentity, opts CoordinatorOptions
 		heartbeatTimeout:  timeout,
 		onMasterChanged:   opts.OnMasterChanged,
 		startupRecovery:   opts.StartupRecovery,
+		snapshotRefresh:   make(chan struct{}, 1),
 	}
 }
 
@@ -127,6 +129,9 @@ func (c *Coordinator) Initialize(ctx context.Context) error {
 	c.mu.Unlock()
 	if errBeat := c.heartbeatAndElect(ctx, incarnation); errBeat != nil {
 		return c.retireFailedInitialization(ctx, incarnation, errBeat)
+	}
+	if errSnapshot := c.syncCPANodeSnapshot(ctx, incarnation); errSnapshot != nil {
+		log.Warnf("failed to sync initial CPA node snapshot: %v", errSnapshot)
 	}
 	c.mu.Lock()
 	c.homeIncarnation = incarnation
@@ -215,6 +220,19 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "session affinity", c.repo.PurgeExpiredSessionBindings)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "kv store", c.repo.KVPurgeExpired)
 
+	snapshotCtx, cancelSnapshot := context.WithCancel(ctx)
+	snapshotTicker := time.NewTicker(min(time.Second, c.heartbeatInterval))
+	snapshotDone := make(chan struct{})
+	go func() {
+		defer close(snapshotDone)
+		c.runCPANodeSnapshotLoop(snapshotCtx, snapshotTicker.C, time.Now())
+	}()
+	defer func() {
+		cancelSnapshot()
+		snapshotTicker.Stop()
+		<-snapshotDone
+	}()
+
 	heartbeatTicker := time.NewTicker(c.heartbeatInterval)
 	defer heartbeatTicker.Stop()
 	for {
@@ -242,6 +260,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 				}
 				return errBeat
 			}
+			c.requestCPANodeSnapshotRefresh()
 		}
 	}
 }
@@ -316,21 +335,17 @@ func (c *Coordinator) UpdateClientCount(ctx context.Context, clientCount int) er
 	if errDB != nil {
 		return errDB
 	}
-	now, errNow := DatabaseNow(ctx, db)
-	if errNow != nil {
-		return errNow
-	}
 	if errUpdate := db.WithContext(contextOrBackground(ctx)).
 		Model(&ClusterNodeRecord{}).
 		Where("ip = ? AND port = ?", c.node.IP, c.node.Port).
 		Update("client_count", clientCount).Error; errUpdate != nil {
 		return errUpdate
 	}
-	home, initialized := c.HomeIncarnation()
-	if !initialized {
+	if _, initialized := c.HomeIncarnation(); !initialized {
 		return fmt.Errorf("cluster coordinator is not initialized")
 	}
-	return c.syncCPANodeSnapshot(ctx, home, now)
+	c.requestCPANodeSnapshotRefresh()
+	return nil
 }
 
 // SetOnMasterChanged sets an on master changed.
@@ -384,7 +399,6 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 	}
 
 	var elected ClusterNodeRecord
-	var seenAt time.Time
 	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
 		gate := ClusterMasterGateRecord{ID: 1}
 		if errCreate := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; errCreate != nil {
@@ -398,7 +412,6 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 		if errNow != nil {
 			return errNow
 		}
-		seenAt = now
 		record := ClusterNodeRecord{
 			IP:          c.node.IP,
 			Port:        c.node.Port,
@@ -449,9 +462,6 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 		return errTransaction
 	}
 	c.setMaster(clusterNodeMatches(elected, c.node.IP, c.node.Port))
-	if errSnapshot := c.syncCPANodeSnapshot(ctx, home, seenAt); errSnapshot != nil {
-		log.Warnf("failed to sync CPA node snapshot: %v", errSnapshot)
-	}
 	return nil
 }
 
@@ -483,13 +493,6 @@ func (c *Coordinator) validate() error {
 		return fmt.Errorf("cluster node port must be greater than 0")
 	}
 	return nil
-}
-
-func (c *Coordinator) syncCPANodeSnapshot(ctx context.Context, home HomeIncarnationID, seenAt time.Time) error {
-	if c == nil || c.repo == nil {
-		return nil
-	}
-	return c.repo.ReplaceCPANodeSnapshotForIncarnation(ctx, home, node.GlobalRegistry().List(), seenAt)
 }
 
 func cpaNodeSnapshotRetention(heartbeatTimeout time.Duration) time.Duration {
