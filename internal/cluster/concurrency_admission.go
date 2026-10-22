@@ -131,7 +131,8 @@ func withConcurrencyTransaction(ctx context.Context, db *gorm.DB, fn func(*gorm.
 	return db.WithContext(contextOrBackground(ctx)).Transaction(fn)
 }
 
-// LockActiveConcurrencyLifetimeTx locks and verifies the active membership and Home that accepted a command.
+// LockActiveConcurrencyLifetimeTx pins the active membership and Home until the command commits.
+// State transitions must take FOR UPDATE; KEY SHARE lets independent commands and heartbeats proceed.
 func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *gorm.DB, lifetime ConnectionLifetime) error {
 	if tx == nil || !lifetime.Controlled || strings.TrimSpace(lifetime.Fingerprint) == "" || lifetime.ConnectedAt.IsZero() {
 		return ErrConcurrencyNodeUnavailable
@@ -141,7 +142,7 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 	}
 
 	var membership CPANodeMembershipRecord
-	errMembership := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
+	errMembership := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "KEY SHARE"}).
 		Where("certificate_fingerprint = ? AND connected_at = ? AND state = ? AND home_ip = ? AND home_port = ? AND home_started_at = ?", strings.TrimSpace(lifetime.Fingerprint), lifetime.ConnectedAt, MembershipStateActive, strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&membership).Error
 	if errMembership != nil {
@@ -149,7 +150,7 @@ func (r *Repository) LockActiveConcurrencyLifetimeTx(ctx context.Context, tx *go
 	}
 
 	var home HomeProcessIncarnationRecord
-	errHome := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
+	errHome := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "KEY SHARE"}).
 		Where("home_ip = ? AND home_port = ? AND started_at = ?", strings.TrimSpace(lifetime.Home.IP), lifetime.Home.Port, lifetime.Home.StartedAt).
 		First(&home).Error
 	if errHome != nil || home.State != HomeIncarnationActive {
