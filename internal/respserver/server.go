@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,8 @@ type Server struct {
 	inFlightStore           dispatch.InFlightSnapshotStore
 	concurrencyReleaseStore dispatch.ConcurrencyReleaseStore
 	inFlightLimits          atomic.Pointer[cluster.InFlightLimits]
+	clusterBroadcastMu      sync.Mutex
+	clusterBroadcast        *clusterSubscriptionBroadcast
 }
 
 const (
@@ -182,19 +185,23 @@ func (s *Server) startSubscriptionUpdates(ctx context.Context, tracked *TrackedC
 	}()
 
 	if s.cluster != nil {
+		updates, unsubscribe := s.subscribeClusterUpdates()
+		context.AfterFunc(runCtx, unsubscribe)
 		go func() {
-			ticker := time.NewTicker(clusterSubscriptionUpdateInterval)
-			defer ticker.Stop()
-
 			for {
 				select {
 				case <-runCtx.Done():
 					return
-				case <-ticker.C:
-					if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer); errSend != nil {
-						log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
-						cancel()
+				case payload := <-updates:
+					if runCtx.Err() != nil {
 						return
+					}
+					if len(payload) > 0 {
+						if errSend := writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload)); errSend != nil {
+							log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
+							cancel()
+							return
+						}
 					}
 					if errSend := s.writeRebalanceInstruction(runCtx, tracked.Lifetime(), writer); errSend != nil {
 						log.Debugf("failed to publish rebalance instruction: %v", errSend)
@@ -212,25 +219,6 @@ func (s *Server) refreshSubscriptionLiveness(ctx context.Context, lifetime clust
 		return fmt.Errorf("cluster lifecycle unavailable")
 	}
 	return s.cluster.RefreshCPALiveness(ctx, lifetime)
-}
-
-func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *safeWriter) error {
-	if s == nil || s.cluster == nil || writer == nil {
-		return nil
-	}
-	s.syncClusterClientCount(ctx)
-	payload, errPayload := s.cluster.Handle(ctx, []string{clusterCommand, "NODES"}, "")
-	if errPayload != nil {
-		if ctx != nil && ctx.Err() != nil {
-			return ctx.Err()
-		}
-		log.Warnf("failed to build cluster update for subscriber: %v", errPayload)
-		return nil
-	}
-	if len(payload) == 0 {
-		return nil
-	}
-	return writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload))
 }
 
 func buildOrWriteDispatchReply(writer *safeWriter, reply dispatch.Reply) error {
