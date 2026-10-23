@@ -567,7 +567,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				return
 			}
 			if cmd == "PING" {
-				if unsubscribeConfig != nil {
+				// Telemetry echoes do not refresh liveness or put database work into measured RTT.
+				// Periodic heartbeats and ordinary PINGs retain their existing lifetime checks.
+				latencyPing := len(args) == 2 && strings.HasPrefix(args[1], "home-rtt/")
+				if unsubscribeConfig != nil && !latencyPing {
 					lifetime := tracked.Lifetime()
 					if errLiveness := s.refreshSubscriptionLiveness(connectionCtx, lifetime); errLiveness != nil {
 						log.Warnf("failed to refresh subscription liveness: %v", errLiveness)

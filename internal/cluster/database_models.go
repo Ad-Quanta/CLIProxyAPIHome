@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 11
+const currentDatabaseVersion = 12
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -283,6 +283,8 @@ var databaseMigrationOnlyModels = []databaseModel{
 	newDatabaseModel[ClusterMasterGateRecord]("cluster_master_gate", []string{"id"}, false, false),
 	newDatabaseModel[CPARebalanceClientRecord]("cpa_rebalance_clients", []string{"fingerprint"}, false, false),
 	newDatabaseModel[CPARebalancePlanRecord]("cpa_rebalance_plans", []string{"id"}, false, false),
+	newDatabaseModel[CPALatencyRecord]("cpa_latency_summaries", []string{"fingerprint", "address"}, false, false),
+	newDatabaseModel[CPALatencyConfirmationRecord]("cpa_latency_confirmations", []string{"id"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorRecord]("management_in_flight_snapshot_cursors", []string{"cursor"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorItemRecord]("management_in_flight_snapshot_cursor_items", []string{"cursor", "ordinal"}, false, false),
 	newDatabaseModel[ManagementInFlightSnapshotCursorObservedRecord]("management_in_flight_snapshot_cursor_observed", []string{"cursor", "credential_id"}, false, false),
@@ -362,8 +364,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
-	case 6, 7, 8, 9, 10, currentDatabaseVersion:
-		// Versions 7 through 11 add migrations, indexes, and transient tables;
+	case 6, 7, 8, 9, 10, 11, currentDatabaseVersion:
+		// Versions 7 through 12 add migrations, indexes, and transient tables;
 		// portable table shapes still match v6.
 		return homeDatabaseModels, true
 	default:
