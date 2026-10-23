@@ -35,6 +35,7 @@ const (
 	claudeProfileURL           = "https://api.anthropic.com/api/oauth/profile"
 	kimiUsageURL               = "https://api.kimi.com/coding/v1/usages"
 	xaiBillingURL              = "https://cli-chat-proxy.grok.com/v1/billing"
+	xaiUserURL                 = "https://cli-chat-proxy.grok.com/v1/user?include=subscription"
 	metaQuotaURL               = "https://api.meta.ai/muse-code/key"
 	codexUserAgent             = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 	xaiTokenAuthHeader         = "X-XAI-Token-Auth"
@@ -69,6 +70,7 @@ type Options struct {
 	ClaudeProfileURL       string
 	KimiUsageURL           string
 	XAIBillingURL          string
+	XAIUserURL             string
 	MetaQuotaURL           string
 	AntigravityURLs        []string
 	Now                    func() time.Time
