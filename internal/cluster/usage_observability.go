@@ -1973,15 +1973,24 @@ func usageObservabilityPreAggregatedSQLOrder(metric string, direction string) st
 	return metricColumn + " " + sortDirection + ", scoped.last_used_at DESC, scoped.aggregate_label ASC"
 }
 
-func usageObservabilityAggregateP95Query(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string) *gorm.DB {
+func usageObservabilityAggregateP95Query(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string, aggregateIDs ...string) *gorm.DB {
 	base := usageObservabilityAggregateBaseQuery(db, query, groupBy)
-	ranked := db.Table("(?) AS scoped_latency", base).
-		Select(`
+	scope := db.Table("(?) AS scoped_latency", base).
+		Where("scoped_latency.latency_ms >= ?", 0)
+	if len(aggregateIDs) > 0 {
+		scope = scope.Where("scoped_latency.aggregate_id IN ?", aggregateIDs)
+	}
+	if usageObservabilityIsPostgres(db) {
+		// Match nearest-rank semantics without numbering every row in each partition.
+		return scope.Select("scoped_latency.aggregate_id AS aggregate_id, " +
+			usageObservabilityPostgresPercentile("scoped_latency.latency_ms", 95) + " AS p95_latency_ms").
+			Group("scoped_latency.aggregate_id")
+	}
+	ranked := scope.Select(`
 			scoped_latency.aggregate_id AS aggregate_id,
 			scoped_latency.latency_ms AS latency_ms,
 			COUNT(*) OVER (PARTITION BY scoped_latency.aggregate_id) AS latency_count,
-			ROW_NUMBER() OVER (PARTITION BY scoped_latency.aggregate_id ORDER BY scoped_latency.latency_ms ASC) AS latency_rank`).
-		Where("scoped_latency.latency_ms >= ?", 0)
+			ROW_NUMBER() OVER (PARTITION BY scoped_latency.aggregate_id ORDER BY scoped_latency.latency_ms ASC) AS latency_rank`)
 	return db.Table("(?) AS ranked_latency", ranked).
 		Select("ranked_latency.aggregate_id AS aggregate_id, MIN(ranked_latency.latency_ms) AS p95_latency_ms").
 		Where("ranked_latency.latency_rank * 100 >= ranked_latency.latency_count * 95").
@@ -1992,24 +2001,11 @@ func usageObservabilityAggregateP95Values(db *gorm.DB, query UsageObservabilityR
 	if len(aggregateIDs) == 0 {
 		return map[string]sql.NullFloat64{}, nil
 	}
-	base := usageObservabilityAggregateBaseQuery(db, query, groupBy)
-	ranked := db.Table("(?) AS scoped_latency", base).
-		Select(`
-			scoped_latency.aggregate_id AS aggregate_id,
-			scoped_latency.latency_ms AS latency_ms,
-			COUNT(*) OVER (PARTITION BY scoped_latency.aggregate_id) AS latency_count,
-			ROW_NUMBER() OVER (PARTITION BY scoped_latency.aggregate_id ORDER BY scoped_latency.latency_ms ASC) AS latency_rank`).
-		Where("scoped_latency.latency_ms >= ?", 0).
-		Where("scoped_latency.aggregate_id IN ?", aggregateIDs)
-
 	var rows []struct {
 		AggregateID  string          `gorm:"column:aggregate_id"`
 		P95LatencyMS sql.NullFloat64 `gorm:"column:p95_latency_ms"`
 	}
-	if errScan := db.Table("(?) AS ranked_latency", ranked).
-		Select("ranked_latency.aggregate_id AS aggregate_id, MIN(ranked_latency.latency_ms) AS p95_latency_ms").
-		Where("ranked_latency.latency_rank * 100 >= ranked_latency.latency_count * 95").
-		Group("ranked_latency.aggregate_id").
+	if errScan := usageObservabilityAggregateP95Query(db, query, groupBy, aggregateIDs...).
 		Scan(&rows).Error; errScan != nil {
 		return nil, errScan
 	}
