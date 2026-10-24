@@ -2088,7 +2088,30 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		%s AS metadata_auth_disabled,
 		%s AS metadata_auth_unavailable,
 		"usage"."provider" AS metadata_provider,
-		CASE WHEN "usage"."failed" THEN 'failed' ELSE 'success' END AS metadata_status,
+		CASE WHEN "usage"."failed" THEN 'failed' ELSE 'success' END AS metadata_status`,
+		idExpr,
+		labelExpr,
+		clientUserIDExpr,
+		usernameExpr,
+		clientAPIKeyIDExpr,
+		clientAPIKeyLabelExpr,
+		clientAPIKeyMaskedExpr,
+		credentialTypeExpr,
+		credentialIDExpr,
+		authIndexExpr,
+		credentialProviderExpr,
+		credentialLabelExpr,
+		authUUIDExpr,
+		authNextRetryAtExpr,
+		authStatusExpr,
+		authDisabledExpr,
+		authUnavailableExpr,
+	) + "," + usageObservabilityAggregateMetricsBaseSelect()
+}
+
+// Share row-level token normalization across ordinary and combined rankings.
+func usageObservabilityAggregateMetricsBaseSelect() string {
+	return fmt.Sprintf(`
 		"usage"."timestamp" AS timestamp,
 		"usage"."latency_ms" AS latency_ms,
 		"usage"."failed" AS failed,
@@ -2113,23 +2136,6 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		%s AS cache_rate_tokens,
 		%s AS cache_rate_total_tokens,
 		"billing_charge"."amount" AS amount`,
-		idExpr,
-		labelExpr,
-		clientUserIDExpr,
-		usernameExpr,
-		clientAPIKeyIDExpr,
-		clientAPIKeyLabelExpr,
-		clientAPIKeyMaskedExpr,
-		credentialTypeExpr,
-		credentialIDExpr,
-		authIndexExpr,
-		credentialProviderExpr,
-		credentialLabelExpr,
-		authUUIDExpr,
-		authNextRetryAtExpr,
-		authStatusExpr,
-		authDisabledExpr,
-		authUnavailableExpr,
 		usageObservabilitySQLDisplayTokens(`"usage"`, "input_tokens"),
 		usageObservabilitySQLDisplayTokens(`"usage"`, "output_tokens"),
 		usageObservabilitySQLCacheReadTokens(`"usage"`),
@@ -2230,7 +2236,7 @@ func usageObservabilityAggregateSQLSelect(includeP95 bool) string {
 	if includeP95 {
 		p95Select = "MAX(p95.p95_latency_ms) AS p95_latency_ms"
 	}
-	return fmt.Sprintf(`
+	return `
 		scoped.aggregate_id AS aggregate_id,
 		COALESCE(NULLIF(MAX(scoped.aggregate_label), ''), scoped.aggregate_id) AS aggregate_label,
 		MAX(scoped.metadata_user_id) AS metadata_user_id,
@@ -2249,7 +2255,12 @@ func usageObservabilityAggregateSQLSelect(includeP95 bool) string {
 		MAX(CASE WHEN scoped.metadata_auth_disabled THEN 1 ELSE 0 END) AS metadata_auth_disabled,
 		MAX(CASE WHEN scoped.metadata_auth_unavailable THEN 1 ELSE 0 END) AS metadata_auth_unavailable,
 		MAX(scoped.metadata_provider) AS metadata_provider,
-		MAX(scoped.metadata_status) AS metadata_status,
+		MAX(scoped.metadata_status) AS metadata_status,` + usageObservabilityAggregateMetricsSQLSelect(p95Select)
+}
+
+// Keep additive metrics and nullable latency/amount semantics identical for all rankings.
+func usageObservabilityAggregateMetricsSQLSelect(p95Select string) string {
+	return fmt.Sprintf(`
 		COUNT(*) AS request_count,
 		SUM(CASE WHEN scoped.failed THEN 0 ELSE 1 END) AS success_count,
 		SUM(CASE WHEN scoped.failed THEN 1 ELSE 0 END) AS failed_count,
