@@ -239,6 +239,8 @@ func runCustomMigrations(db *gorm.DB) error {
 	}{
 		{name: "migrate_cpa_node_primary_key", run: migrateCPANodePrimaryKey},
 		{name: "migrate_billing_indexes", run: migrateBillingIndexes},
+		{name: "migrate_billing_usage_cover_index", run: migrateBillingUsageCoverIndex},
+		{name: "migrate_billing_overview_indexes", run: migrateBillingOverviewIndexes},
 		{name: "migrate_billing_import_indexes", run: migrateBillingImportIndexes},
 		{name: "migrate_certificate_fingerprints", run: migrateCertificateFingerprints},
 		{name: "migrate_api_key_channels", run: migrateAPIKeyChannels},
