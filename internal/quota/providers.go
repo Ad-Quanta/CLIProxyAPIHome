@@ -137,14 +137,14 @@ func (c *Collector) probeXAI(ctx context.Context, auth *coreauth.Auth) (probeRes
 		windows, plan = monthlyWindows, monthlyPlan
 	}
 	// A free account reports the same weekly credits period as a subscription
-	// account but is not entitled to the weekly allowance, so the subscription
-	// tier is probed first to tell the two apart.
-	userURL := strings.TrimSpace(c.options.XAIUserURL)
-	if userURL == "" {
-		userURL = xaiUserURLFromBillingURL(c.options.XAIBillingURL)
+	// account but is not entitled to the weekly allowance. Check the subscription
+	// tier before applying weekly credits.
+	profileURL := strings.TrimSpace(c.options.XAIProfileURL)
+	if profileURL == "" {
+		profileURL = xaiProfileURLFromBillingURL(c.options.XAIBillingURL)
 	}
 	tier, tierKnown := "", false
-	if userPayload, _, errUser := c.probeRequest(ctx, auth, http.MethodGet, userURL, nil, headers); errUser == nil {
+	if userPayload, _, errUser := c.probeRequest(ctx, auth, http.MethodGet, xaiProfileRequestURL(profileURL), nil, headers); errUser == nil {
 		tier, tierKnown = parseXAISubscriptionTier(userPayload)
 	}
 	if plan == nil && tierKnown {
@@ -943,14 +943,30 @@ func xaiWeeklyBillingURL(monthlyURL string) string {
 	return parsed.String()
 }
 
-// xaiUserURLFromBillingURL derives the subscription-profile endpoint from the
-// billing endpoint so tests and self-hosted endpoints keep working.
-func xaiUserURLFromBillingURL(billingURL string) string {
+// xaiProfileURLFromBillingURL derives the profile endpoint from the billing
+// endpoint so tests and self-hosted endpoints keep working.
+func xaiProfileURLFromBillingURL(billingURL string) string {
 	parsed, errParse := url.Parse(billingURL)
 	if errParse != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return xaiUserURL
+		return xaiProfileURL
 	}
-	return parsed.Scheme + "://" + parsed.Host + "/v1/user?include=subscription"
+	return parsed.Scheme + "://" + parsed.Host + "/v1/user"
+}
+
+// xaiProfileRequestURL adds the subscription profile selector. The base URL stays
+// query-free, matching the other collector endpoints.
+func xaiProfileRequestURL(profileURL string) string {
+	parsed, errParse := url.Parse(strings.TrimSpace(profileURL))
+	if errParse != nil || parsed.Scheme == "" || parsed.Host == "" {
+		parsed, errParse = url.Parse(xaiProfileURL)
+		if errParse != nil {
+			return xaiProfileURL
+		}
+	}
+	query := parsed.Query()
+	query.Set("include", "subscription")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 // parseXAISubscriptionTier returns the tier reported by the xAI user profile.

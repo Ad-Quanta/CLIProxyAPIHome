@@ -242,17 +242,28 @@ func TestParseXAIWeeklyWindowAcceptsMissingUsageWithWeeklyPeriod(t *testing.T) {
 	}
 }
 
+func TestXAIProfileRequestURLAddsSubscriptionInclude(t *testing.T) {
+	got := xaiProfileRequestURL(xaiProfileURL)
+	if got != xaiProfileURL+"?include=subscription" {
+		t.Fatalf("xaiProfileRequestURL() = %q", got)
+	}
+	derived := xaiProfileRequestURL(xaiProfileURLFromBillingURL("http://127.0.0.1:8327/v1/billing"))
+	if !strings.HasPrefix(derived, "http://127.0.0.1:8327/v1/user?") || !strings.Contains(derived, "include=subscription") {
+		t.Fatalf("derived profile URL = %q", derived)
+	}
+}
+
 func TestParseXAISubscriptionTier(t *testing.T) {
 	tests := []struct {
-		body       string
-		wantTier   string
-		wantKnown  bool
-		wantPaid   bool
-		wantPlan   string
-		wantPremiu bool
+		body        string
+		wantTier    string
+		wantKnown   bool
+		wantPaid    bool
+		wantPlan    string
+		wantPremium bool
 	}{
 		{body: `{"subscriptionTier":"SuperGrokPlus"}`, wantTier: "SuperGrokPlus", wantKnown: true, wantPaid: true, wantPlan: "SuperGrok Plus"},
-		{body: `{"subscriptionTier":"SuperGrokHeavy"}`, wantTier: "SuperGrokHeavy", wantKnown: true, wantPaid: true, wantPlan: "SuperGrok Heavy", wantPremiu: true},
+		{body: `{"subscriptionTier":"SuperGrokHeavy"}`, wantTier: "SuperGrokHeavy", wantKnown: true, wantPaid: true, wantPlan: "SuperGrok Heavy", wantPremium: true},
 		{body: `{"subscriptionTier":null}`, wantTier: "", wantKnown: true, wantPaid: false},
 		{body: `{"subscriptionTier":"Free"}`, wantTier: "Free", wantKnown: true, wantPaid: false},
 		{body: `{"email":"a@b.c"}`, wantTier: "", wantKnown: false, wantPaid: false},
@@ -273,8 +284,8 @@ func TestParseXAISubscriptionTier(t *testing.T) {
 			}
 			continue
 		}
-		if plan == nil || plan.Name != test.wantPlan || plan.Premium != test.wantPremiu {
-			t.Fatalf("xaiPlanFromSubscriptionTier(%q) = %+v; want %q premium=%v", tier, plan, test.wantPlan, test.wantPremiu)
+		if plan == nil || plan.Name != test.wantPlan || plan.Premium != test.wantPremium {
+			t.Fatalf("xaiPlanFromSubscriptionTier(%q) = %+v; want %q premium=%v", tier, plan, test.wantPlan, test.wantPremium)
 		}
 	}
 }
@@ -286,6 +297,9 @@ func TestCollectorXAIFreeAccountHasNoWeeklyQuota(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasPrefix(request.URL.Path, "/v1/user"):
+			if request.URL.Query().Get("include") != "subscription" {
+				t.Errorf("profile include = %q, want subscription", request.URL.Query().Get("include"))
+			}
 			_, _ = w.Write([]byte(`{"email":"free@example.com","subscriptionTier":null}`))
 		case request.URL.Query().Get("format") == "credits":
 			_, _ = w.Write([]byte(`{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-22T00:00:00Z","end":"2026-10-29T00:00:00Z"}}}`))
@@ -317,6 +331,9 @@ func TestCollectorSuperGrokPlusZeroUsageWeeklyQuota(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasPrefix(request.URL.Path, "/v1/user"):
+			if request.URL.Query().Get("include") != "subscription" {
+				t.Errorf("profile include = %q, want subscription", request.URL.Query().Get("include"))
+			}
 			_, _ = w.Write([]byte(`{"email":"plus@example.com","subscriptionTier":"SuperGrokPlus"}`))
 		case request.URL.Query().Get("format") == "credits":
 			_, _ = w.Write([]byte(`{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-22T11:26:03Z","end":"2026-10-29T11:26:03Z"},"isUnifiedBillingUser":true}}`))
