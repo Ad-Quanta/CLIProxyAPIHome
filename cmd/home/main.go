@@ -235,10 +235,6 @@ func run() int {
 	repo := cluster.NewRepository(clusterDB)
 	clusterRepo = repo
 	nodeCfg := resolveDatabaseNodeConfig(clusterCfg, clusterExists)
-	if _, errEnsureLifecycle := repo.EnsureLifecycleConfig(runCtx, nodeCfg.HeartbeatTimeout); errEnsureLifecycle != nil {
-		log.Errorf("failed to initialize lifecycle configuration: %v", errEnsureLifecycle)
-		return 1
-	}
 	if importState {
 		stats, errImport := cluster.ImportLocalState(runCtx, cluster.ImportOptions{
 			ConfigPath:           configPath,
@@ -278,6 +274,10 @@ func run() int {
 	}
 	if len(snapshot) == 0 {
 		log.Errorf("database config is empty; run with -import first")
+		return 1
+	}
+	if _, errEnsureLifecycle := repo.EnsureLifecycleConfig(runCtx, nodeCfg.HeartbeatTimeout); errEnsureLifecycle != nil {
+		log.Errorf("failed to initialize lifecycle configuration: %v", errEnsureLifecycle)
 		return 1
 	}
 	lastSeenID, runtimeCfg, errRuntimeConfig := loadInitialRuntimeConfig(runCtx, repo)
