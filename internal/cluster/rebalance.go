@@ -273,7 +273,7 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 		return errDB
 	}
 	trace := gateTransactionTrace{Interface: db.Logger, operation: "rebalance_plan", startedAt: time.Now()}
-	errTransaction := db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) (errResult error) {
+	errTransaction := trace.transaction(ctx, db, func(tx *gorm.DB) (errResult error) {
 		gate, now, errGate := lockRebalanceGate(tx)
 		if errGate != nil {
 			return errGate
@@ -539,7 +539,7 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 	accepted := false
 	var probe *RebalanceTarget
 	trace := gateTransactionTrace{Interface: h.repo.db.Logger, operation: "rebalance_" + strings.ToLower(action), startedAt: time.Now()}
-	errTransaction := h.repo.db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) (errResult error) {
+	errTransaction := trace.transaction(ctx, h.repo.db, func(tx *gorm.DB) (errResult error) {
 		// Local dispatch contention must not hold the cluster-wide election gate.
 		if errLifetime := h.repo.LockActiveConcurrencyLifetimeTx(ctx, tx, lifetime); errLifetime != nil {
 			return errLifetime

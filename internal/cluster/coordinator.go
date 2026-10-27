@@ -225,6 +225,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
 	defer cancelCleanup()
+	if sqlDB, errDB := c.repo.db.DB(); errDB != nil {
+		log.Warn("cluster database pool observation unavailable")
+	} else {
+		poolTicker := time.NewTicker(time.Minute)
+		poolDone := make(chan struct{})
+		go func() {
+			defer close(poolDone)
+			observeDatabasePool(cleanupCtx, sqlDB, c.repo.db.Dialector.Name(), poolTicker.C)
+		}()
+		defer func() {
+			cancelCleanup()
+			poolTicker.Stop()
+			<-poolDone
+		}()
+	}
 	go c.runLifecycleCleanupLoop(cleanupCtx)
 	go c.runRebalanceLoop(cleanupCtx)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "session affinity", c.repo.PurgeExpiredSessionBindings)
@@ -413,7 +428,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 
 	var elected ClusterNodeRecord
 	trace := gateTransactionTrace{Interface: db.Logger, operation: "election", startedAt: time.Now()}
-	errTransaction := db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+	errTransaction := trace.transaction(ctx, db, func(tx *gorm.DB) error {
 		gate, now, errGate := lockMasterGate(tx)
 		if errGate != nil {
 			return errGate
