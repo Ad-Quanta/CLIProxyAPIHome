@@ -120,6 +120,9 @@ func (c *Coordinator) Initialize(ctx context.Context) error {
 	if errCreate := db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&ClusterMasterGateRecord{ID: 1}).Error; errCreate != nil {
 		return errCreate
 	}
+	if errCreate := db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&ClusterRebalanceGateRecord{ID: 1}).Error; errCreate != nil {
+		return errCreate
+	}
 	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2", rebalanceCapability, rebalanceLatencyCapability})
 	if errRegister != nil {
 		return errRegister
@@ -411,7 +414,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 	var elected ClusterNodeRecord
 	trace := gateTransactionTrace{Interface: db.Logger, operation: "election", startedAt: time.Now()}
 	errTransaction := db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		gate, now, errGate := lockRebalanceGate(tx)
+		gate, now, errGate := lockMasterGate(tx)
 		if errGate != nil {
 			return errGate
 		}

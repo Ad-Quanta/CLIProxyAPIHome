@@ -45,8 +45,10 @@ func TestGateTransactionTracePreservesRedactionAndThreshold(t *testing.T) {
 	trace.startedAt = time.Now().Add(-3 * time.Second)
 	trace.lockedAt = time.Now().Add(-time.Second)
 	trace.gateWait, trace.planCount = 20*time.Millisecond, 2
+	trace.rebalanceWait = 30 * time.Millisecond
+	trace.rebalanceLockedAt = time.Now().Add(-2 * time.Second)
 	trace.logResult(errors.New(secret))
-	for _, expected := range []string{"operation=test", "total_ms=", "gate_acquire_ms=20.000", "gate_held_ms=", "sql_count=1", "plan_count=2", "success=false"} {
+	for _, expected := range []string{"operation=test", "total_ms=", "gate_acquire_ms=20.000", "gate_held_ms=", "sql_count=1", "plan_count=2", "success=false", "rebalance_acquire_ms=30.000", "rebalance_held_ms="} {
 		if !strings.Contains(summary.String(), expected) {
 			t.Fatalf("missing transaction diagnostic %q: %s", expected, summary.String())
 		}

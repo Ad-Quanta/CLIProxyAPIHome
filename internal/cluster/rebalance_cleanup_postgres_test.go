@@ -38,6 +38,9 @@ func TestPostgresRebalanceCleanupSkipsLocksAndElectionGate(t *testing.T) {
 	if _, _, errGate := lockRebalanceGate(holder); errGate != nil {
 		t.Fatal(errGate)
 	}
+	if _, _, errGate := lockMasterGate(holder); errGate != nil {
+		t.Fatal(errGate)
+	}
 	// The cleaner sees the old terminal version but must skip its uncommitted writer.
 	if errUpdate := holder.Model(&records[0]).Updates(map[string]any{"state": rebalanceExecuting, "updated_at": now}).Error; errUpdate != nil {
 		t.Fatal(errUpdate)

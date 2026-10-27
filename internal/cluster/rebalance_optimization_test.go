@@ -97,8 +97,8 @@ func TestRebalanceInvalidLeaseSkipsHomeSnapshot(t *testing.T) {
 					if claimRebalanceTestPlan(t, f, plan) {
 						t.Fatal("invalid lease authorized a claim")
 					}
-					if len(recorder.statements) != 4 {
-						t.Fatalf("claim must only lock the lifetime and gate, then read the clock: %v", recorder.statements)
+					if len(recorder.statements) != 5 {
+						t.Fatalf("claim must only lock the lifetime and gates, then read the clock: %v", recorder.statements)
 					}
 				})
 			}
@@ -118,7 +118,7 @@ func TestRebalanceInvalidLeaseSkipsHomeSnapshot(t *testing.T) {
 	}
 }
 
-func TestRebalanceStageOneSQLBudget(t *testing.T) {
+func TestRebalanceStageTwoSQLBudget(t *testing.T) {
 	for _, backend := range []struct {
 		name string
 		repo func(*testing.T) *Repository
@@ -129,7 +129,7 @@ func TestRebalanceStageOneSQLBudget(t *testing.T) {
 				members   int
 				wantSQL   int
 				wantPlans int
-			}{{"idle", 0, 9, 0}, {"batch", 8, 10, 2}} {
+			}{{"idle", 0, 13, 0}, {"batch", 8, 14, 2}} {
 				t.Run(test.name, func(t *testing.T) {
 					f := seedRebalanceFixture(t, backend.repo(t), test.members)
 					recorder := &rebalanceSQLRecorder{Interface: f.repo.db.Logger}
@@ -155,8 +155,11 @@ func TestRebalanceStageOneSQLBudget(t *testing.T) {
 					}
 					recorder.statements = nil
 					f.reconcile(t, 0)
-					if len(recorder.statements) != 5 || recorder.count("SELECT", "cpa_rebalance_plans") != 1 {
-						t.Fatalf("maintenance SQL = %d, want 5: %v", len(recorder.statements), recorder.statements)
+					if len(recorder.statements) != 6 || recorder.count("SELECT", "cpa_rebalance_plans") != 1 {
+						t.Fatalf("maintenance SQL = %d, want 6: %v", len(recorder.statements), recorder.statements)
+					}
+					if recorder.count("SELECT", "cluster_master_gate") != 1 || recorder.count("UPDATE", "") != 0 || recorder.count("INSERT", "") != 0 || recorder.count("DELETE", "") != 0 {
+						t.Fatalf("read-only maintenance fenced or wrote state: %v", recorder.statements)
 					}
 				})
 			}
