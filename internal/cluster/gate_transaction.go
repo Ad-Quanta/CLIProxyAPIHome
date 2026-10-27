@@ -52,10 +52,10 @@ func (t *gateTransactionTrace) logResult(err error) {
 		}
 	}
 	// SQL count excludes driver-level transaction control; timings end after commit or rollback.
-	const message = "cluster transaction operation=%s total_ms=%.3f gate_acquire_ms=%.3f gate_held_ms=%.3f sql_count=%d plan_count=%d success=%t rebalance_acquire_ms=%.3f rebalance_held_ms=%.3f"
+	const message = "cluster transaction operation=%s success=%t total_ms=%.3f sql_count=%d plan_count=%d gate_acquire_ms=%.3f gate_held_ms=%.3f rebalance_acquire_ms=%.3f rebalance_held_ms=%.3f"
 	if total >= slowThreshold {
-		log.Warnf(message, t.operation, float64(total)/float64(time.Millisecond), float64(t.gateWait)/float64(time.Millisecond), float64(held)/float64(time.Millisecond), t.sqlCount, t.planCount, err == nil, float64(t.rebalanceWait)/float64(time.Millisecond), float64(rebalanceHeld)/float64(time.Millisecond))
+		log.Warnf(message, t.operation, err == nil, float64(total)/float64(time.Millisecond), t.sqlCount, t.planCount, float64(t.gateWait)/float64(time.Millisecond), float64(held)/float64(time.Millisecond), float64(t.rebalanceWait)/float64(time.Millisecond), float64(rebalanceHeld)/float64(time.Millisecond))
 		return
 	}
-	log.Debugf(message, t.operation, float64(total)/float64(time.Millisecond), float64(t.gateWait)/float64(time.Millisecond), float64(held)/float64(time.Millisecond), t.sqlCount, t.planCount, err == nil, float64(t.rebalanceWait)/float64(time.Millisecond), float64(rebalanceHeld)/float64(time.Millisecond))
+	log.Debugf(message, t.operation, err == nil, float64(total)/float64(time.Millisecond), t.sqlCount, t.planCount, float64(t.gateWait)/float64(time.Millisecond), float64(held)/float64(time.Millisecond), float64(t.rebalanceWait)/float64(time.Millisecond), float64(rebalanceHeld)/float64(time.Millisecond))
 }

@@ -48,12 +48,22 @@ func TestGateTransactionTracePreservesRedactionAndThreshold(t *testing.T) {
 	trace.rebalanceWait = 30 * time.Millisecond
 	trace.rebalanceLockedAt = time.Now().Add(-2 * time.Second)
 	trace.logResult(errors.New(secret))
-	for _, expected := range []string{"operation=test", "total_ms=", "gate_acquire_ms=20.000", "gate_held_ms=", "sql_count=1", "plan_count=2", "success=false", "rebalance_acquire_ms=30.000", "rebalance_held_ms="} {
-		if !strings.Contains(summary.String(), expected) {
-			t.Fatalf("missing transaction diagnostic %q: %s", expected, summary.String())
+	previousIndex := -1
+	for _, expected := range []string{"operation=test", "success=false", "total_ms=", "sql_count=1", "plan_count=2", "gate_acquire_ms=20.000", "gate_held_ms=", "rebalance_acquire_ms=30.000", "rebalance_held_ms="} {
+		index := strings.Index(summary.String(), expected)
+		if index <= previousIndex {
+			t.Fatalf("missing or out-of-order transaction diagnostic %q: %s", expected, summary.String())
 		}
+		previousIndex = index
 	}
 	if strings.Contains(summary.String(), secret) {
 		t.Fatal("transaction summary exposed an error's sensitive contents")
+	}
+	summary.Reset()
+	log.SetLevel(log.DebugLevel)
+	trace.startedAt = time.Now().Add(-time.Second)
+	trace.logResult(nil)
+	if !strings.Contains(summary.String(), "operation=test success=true total_ms=") || !strings.Contains(summary.String(), "sql_count=1 plan_count=2 gate_acquire_ms=20.000") {
+		t.Fatalf("debug transaction summary lost field order or values: %s", summary.String())
 	}
 }
