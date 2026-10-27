@@ -89,61 +89,83 @@ func rebalanceHomeKey(home HomeIncarnationID) string {
 
 // lockRebalanceGate serializes planning, claims, results, and election changes.
 func lockRebalanceGate(tx *gorm.DB) (ClusterMasterGateRecord, time.Time, error) {
+	startedAt := time.Now()
 	gate := ClusterMasterGateRecord{ID: 1}
-	if errCreate := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; errCreate != nil {
-		return gate, time.Time{}, errCreate
+	errLock := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&gate, "id = ?", 1).Error
+	if errors.Is(errLock, gorm.ErrRecordNotFound) {
+		// Initialization normally creates the gate; recover a missing row without
+		// issuing an INSERT on every heartbeat and rebalance command.
+		if errCreate := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; errCreate != nil {
+			return gate, time.Time{}, errCreate
+		}
+		errLock = tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&gate, "id = ?", 1).Error
 	}
-	if errLock := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&gate, "id = ?", 1).Error; errLock != nil {
+	if trace, ok := tx.Logger.(*gateTransactionTrace); ok {
+		trace.gateWait = time.Since(startedAt)
+		if errLock == nil {
+			trace.lockedAt = time.Now()
+		}
+	}
+	if errLock != nil {
 		return gate, time.Time{}, errLock
 	}
 	now, errNow := DatabaseNow(tx.Statement.Context, tx)
 	return gate, now, errNow
 }
 
-func rebalanceLeaderValid(tx *gorm.DB, gate ClusterMasterGateRecord, now time.Time, timeout time.Duration) (bool, error) {
-	if gate.Term <= 0 || !now.Before(gate.LeaseUntil) {
-		return false, nil
-	}
-	var masters []ClusterNodeRecord
-	if errFind := tx.Where("is_master = ? AND last_seen_at >= ?", true, now.Add(-timeout)).Find(&masters).Error; errFind != nil {
-		return false, errFind
-	}
-	if len(masters) != 1 || gate.MasterKey != rebalanceHomeKey(HomeIncarnationID{IP: masters[0].IP, Port: masters[0].Port, StartedAt: masters[0].StartedAt}) {
-		return false, nil
-	}
-	var active int64
-	errCount := tx.Model(&HomeProcessIncarnationRecord{}).Where("home_ip = ? AND home_port = ? AND started_at = ? AND state = ? AND last_seen_at >= ?", masters[0].IP, masters[0].Port, masters[0].StartedAt, HomeIncarnationActive, now.Add(-timeout)).Count(&active).Error
-	return active == 1, errCount
+type rebalanceHomeSnapshot struct {
+	homes     map[string]rebalanceHome
+	masterKey string
 }
 
-func loadRebalanceHomes(tx *gorm.DB, now time.Time, timeout time.Duration) (map[string]rebalanceHome, error) {
-	var nodes []ClusterNodeRecord
-	if errFind := tx.Where("last_seen_at >= ?", now.Add(-timeout)).Find(&nodes).Error; errFind != nil {
-		return nil, errFind
+func (s rebalanceHomeSnapshot) leaderValid(gate ClusterMasterGateRecord, now time.Time) bool {
+	return gate.Term > 0 && now.Before(gate.LeaseUntil) && s.masterKey != "" && s.masterKey == gate.MasterKey
+}
+
+// loadRebalanceHomes reads election eligibility and Home capabilities in one snapshot.
+func loadRebalanceHomes(tx *gorm.DB, now time.Time, timeout time.Duration) (rebalanceHomeSnapshot, error) {
+	var records []struct {
+		IP            string
+		Port          int
+		StartedAt     time.Time
+		IsMaster      bool
+		ProcessActive bool
+		Capabilities  JSONB
 	}
-	var processes []HomeProcessIncarnationRecord
-	if errFind := tx.Where("state = ? AND last_seen_at >= ?", HomeIncarnationActive, now.Add(-timeout)).Find(&processes).Error; errFind != nil {
-		return nil, errFind
+	cutoff := now.Add(-timeout)
+	errFind := tx.Table("cluster AS node").
+		Select("node.ip, node.port, node.started_at, node.is_master, process.home_ip IS NOT NULL AS process_active, process.capabilities").
+		Joins("LEFT JOIN home_process_incarnation AS process ON process.home_ip = node.ip AND process.home_port = node.port AND process.started_at = node.started_at AND process.state = ? AND process.last_seen_at >= ?", HomeIncarnationActive, cutoff).
+		Where("node.last_seen_at >= ?", cutoff).Scan(&records).Error
+	if errFind != nil {
+		return rebalanceHomeSnapshot{}, errFind
 	}
-	processByKey := make(map[string]HomeProcessIncarnationRecord, len(processes))
-	for _, process := range processes {
-		processByKey[rebalanceHomeKey(HomeIncarnationID{IP: process.HomeIP, Port: process.HomePort, StartedAt: process.StartedAt})] = process
-	}
-	homes := make(map[string]rebalanceHome, len(nodes))
-	for _, node := range nodes {
-		id := HomeIncarnationID{IP: node.IP, Port: node.Port, StartedAt: node.StartedAt}
-		key := rebalanceHomeKey(id)
-		process, ok := processByKey[key]
-		if !ok {
+	snapshot := rebalanceHomeSnapshot{homes: make(map[string]rebalanceHome, len(records))}
+	masterCount := 0
+	for _, record := range records {
+		// Count live master flags even when their process is inactive. Filtering
+		// them out in the JOIN would hide an inconsistent multi-master state.
+		if record.IsMaster {
+			masterCount++
+		}
+		if !record.ProcessActive {
 			continue
 		}
+		id := HomeIncarnationID{IP: record.IP, Port: record.Port, StartedAt: record.StartedAt}
+		key := rebalanceHomeKey(id)
 		var capabilities []string
-		if errJSON := json.Unmarshal(process.Capabilities, &capabilities); errJSON != nil {
-			return nil, errJSON
+		if errJSON := json.Unmarshal(record.Capabilities, &capabilities); errJSON != nil {
+			return rebalanceHomeSnapshot{}, errJSON
 		}
-		homes[key] = rebalanceHome{id: id, capable: slices.Contains(capabilities, rebalanceCapability), latencyCapable: slices.Contains(capabilities, rebalanceLatencyCapability)}
+		snapshot.homes[key] = rebalanceHome{id: id, capable: slices.Contains(capabilities, rebalanceCapability), latencyCapable: slices.Contains(capabilities, rebalanceLatencyCapability)}
+		if record.IsMaster {
+			snapshot.masterKey = key
+		}
 	}
-	return homes, nil
+	if masterCount != 1 {
+		snapshot.masterKey = ""
+	}
+	return snapshot, nil
 }
 
 func loadRebalanceMembers(tx *gorm.DB, homes map[string]rebalanceHome, now time.Time) ([]CPANodeMembershipRecord, map[string]int, error) {
@@ -196,7 +218,9 @@ func reserveRebalanceLoad(plan CPARebalancePlanRecord, members map[string]CPANod
 	return 1
 }
 
-func finishRebalancePlan(tx *gorm.DB, plan *CPARebalancePlanRecord, state string, now time.Time) error {
+// plans is the gate-protected working set, including any peer transitions already applied.
+// Callers without a working set pass nil and load pending peers only when needed.
+func finishRebalancePlan(tx *gorm.DB, plan *CPARebalancePlanRecord, state string, now time.Time, plans []CPARebalancePlanRecord) error {
 	if plan.State != rebalancePending && plan.State != rebalanceExecuting {
 		return nil
 	}
@@ -233,12 +257,20 @@ func finishRebalancePlan(tx *gorm.DB, plan *CPARebalancePlanRecord, state string
 		return errSave
 	}
 	if plan.SwapGroupID != "" && (state == rebalanceFailed || state == rebalanceCanceled) {
-		var peers []CPARebalancePlanRecord
-		if errFind := tx.Where("swap_group_id = ? AND state = ?", plan.SwapGroupID, rebalancePending).Find(&peers).Error; errFind != nil {
-			return errFind
+		if plans == nil {
+			if errFind := tx.Where("swap_group_id = ? AND state = ?", plan.SwapGroupID, rebalancePending).Find(&plans).Error; errFind != nil {
+				return errFind
+			}
+			if trace, ok := tx.Logger.(*gateTransactionTrace); ok {
+				trace.planCount += len(plans)
+			}
 		}
-		for index := range peers {
-			if errFinish := finishRebalancePlan(tx, &peers[index], rebalanceCanceled, now); errFinish != nil {
+		for index := range plans {
+			peer := &plans[index]
+			if peer.SwapGroupID != plan.SwapGroupID || peer.State != rebalancePending {
+				continue
+			}
+			if errFinish := finishRebalancePlan(tx, peer, rebalanceCanceled, now, plans); errFinish != nil {
 				return errFinish
 			}
 		}
@@ -252,25 +284,23 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 	if errDB != nil {
 		return errDB
 	}
-	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+	trace := gateTransactionTrace{Interface: db.Logger, operation: "rebalance_plan", startedAt: time.Now()}
+	errTransaction := db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
 		gate, now, errGate := lockRebalanceGate(tx)
 		if errGate != nil {
 			return errGate
 		}
-		valid, errLeader := rebalanceLeaderValid(tx, gate, now, timeout)
-		if errLeader != nil {
-			return errLeader
-		}
-		if !valid || gate.MasterKey != rebalanceHomeKey(home) {
+		if gate.MasterKey != rebalanceHomeKey(home) || gate.Term <= 0 || !now.Before(gate.LeaseUntil) {
 			return nil
 		}
-		homes, errHomes := loadRebalanceHomes(tx, now, timeout)
+		snapshot, errHomes := loadRebalanceHomes(tx, now, timeout)
 		if errHomes != nil {
 			return errHomes
 		}
-		if _, ok := homes[rebalanceHomeKey(home)]; !ok {
+		if !snapshot.leaderValid(gate, now) {
 			return nil
 		}
+		homes := snapshot.homes
 		members, loads, errMembers := loadRebalanceMembers(tx, homes, now)
 		if errMembers != nil {
 			return errMembers
@@ -284,14 +314,11 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 		if errFind := tx.Where("state IN ?", []string{rebalancePending, rebalanceExecuting}).Find(&plans).Error; errFind != nil {
 			return errFind
 		}
+		trace.planCount = len(plans)
 		busy := make(map[string]bool)
 		active := 0
 		for index := range plans {
 			plan := &plans[index]
-			// A failed peer may have canceled this pending leg earlier in this transaction.
-			if errReload := tx.First(plan, "id = ?", plan.ID).Error; errReload != nil {
-				return errReload
-			}
 			if plan.State != rebalancePending && plan.State != rebalanceExecuting {
 				continue
 			}
@@ -316,31 +343,26 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 				state = rebalanceFailed
 			}
 			if state != "" {
-				if errFinish := finishRebalancePlan(tx, plan, state, now); errFinish != nil {
+				if errFinish := finishRebalancePlan(tx, plan, state, now, plans); errFinish != nil {
 					return errFinish
 				}
 				continue
 			}
 		}
-		// Finish the whole group before projecting reservations: a later failure can cancel an earlier peer.
-		plans = nil
-		if errFind := tx.Where("state IN ?", []string{rebalancePending, rebalanceExecuting}).Find(&plans).Error; errFind != nil {
-			return errFind
-		}
+		// Peer cancellations update this same working set, so reservations need no reload.
 		for _, plan := range plans {
+			if plan.State != rebalancePending && plan.State != rebalanceExecuting {
+				continue
+			}
 			busy[plan.Fingerprint] = true
 			active++
 			total += reserveRebalanceLoad(plan, byFingerprint, loads)
 		}
-		if errDelete := tx.Where("state NOT IN ? AND updated_at < ?", []string{rebalancePending, rebalanceExecuting}, now.Add(-24*time.Hour)).Delete(&CPARebalancePlanRecord{}).Error; errDelete != nil {
-			return errDelete
-		}
 		if now.Sub(gate.LastBalanceAt) < rebalanceInterval {
 			return nil
 		}
-		gate.LastBalanceAt = now
-		if errSave := tx.Save(&gate).Error; errSave != nil {
-			return errSave
+		if errUpdate := tx.Model(&gate).Update("last_balance_at", now).Error; errUpdate != nil {
+			return errUpdate
 		}
 		if len(homes) < 2 {
 			return nil
@@ -364,7 +386,8 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 				quotas[key] = max(1, int(math.Min(float64(count)*0.25, (float64(count)-average)*0.5)))
 			}
 		}
-		// Reserve both ends immediately so concurrent plans cannot all pick the same empty Home.
+		// Reserve both ends immediately, then persist the selected plans in one batch.
+		var newPlans []CPARebalancePlanRecord
 		for active < rebalanceMaxActive {
 			var chosen CPANodeMembershipRecord
 			sourceKey, targetKey := "", ""
@@ -401,18 +424,23 @@ func (r *Repository) ReconcileRebalances(ctx context.Context, home HomeIncarnati
 				break
 			}
 			target := homes[targetKey].id
-			plan := newRebalancePlan(chosen, target, gate.Term, now)
-			if errCreate := tx.Create(&plan).Error; errCreate != nil {
-				return errCreate
-			}
+			newPlans = append(newPlans, newRebalancePlan(chosen, target, gate.Term, now))
 			busy[chosen.CertificateFingerprint] = true
 			quotas[sourceKey]--
 			loads[sourceKey]--
 			loads[targetKey]++
 			active++
 		}
+		if len(newPlans) > 0 {
+			trace.planCount += len(newPlans)
+			if errCreate := tx.Create(&newPlans).Error; errCreate != nil {
+				return errCreate
+			}
+		}
 		return planLatencySwap(tx, gate, now, homes, members, loads, capabilities, latencies, active)
 	})
+	trace.logResult(errTransaction)
+	return errTransaction
 }
 
 func (c *Coordinator) runRebalanceLoop(ctx context.Context) {
@@ -452,9 +480,15 @@ func (h *RESPHandler) RebalanceInstruction(ctx context.Context, lifetime Connect
 	if errNow != nil {
 		return nil, errNow
 	}
-	valid, errLeader := rebalanceLeaderValid(db, gate, now, h.coordinator.heartbeatTimeout)
-	if errLeader != nil || !valid {
-		return nil, errLeader
+	if gate.Term <= 0 || !now.Before(gate.LeaseUntil) {
+		return nil, nil
+	}
+	snapshot, errHomes := loadRebalanceHomes(db, now, h.coordinator.heartbeatTimeout)
+	if errHomes != nil {
+		return nil, errHomes
+	}
+	if !snapshot.leaderValid(gate, now) {
+		return nil, nil
 	}
 	var plan CPARebalancePlanRecord
 	errFirst := db.Where("fingerprint = ? AND source_connected_at = ? AND source_ip = ? AND source_port = ? AND source_started_at = ? AND state = ? AND term = ? AND expires_at > ?", lifetime.Fingerprint, lifetime.ConnectedAt, lifetime.Home.IP, lifetime.Home.Port, lifetime.Home.StartedAt, rebalancePending, gate.Term, now).First(&plan).Error
@@ -475,17 +509,42 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 	if len(args) < 3 {
 		return nil, fmt.Errorf("cluster rebalance: missing action")
 	}
+	action := strings.ToUpper(args[2])
+	var term int64
+	switch action {
+	case "ENABLE":
+		if len(args) != 3 {
+			return nil, fmt.Errorf("cluster rebalance: invalid enable arguments")
+		}
+	case "CLAIM":
+		if len(args) != 7 {
+			return nil, fmt.Errorf("cluster rebalance: invalid claim arguments")
+		}
+		var errTerm error
+		term, errTerm = strconv.ParseInt(args[4], 10, 64)
+		if errTerm != nil {
+			return nil, errTerm
+		}
+	case "RESULT":
+		if len(args) != 5 || (args[4] != "success" && args[4] != "failed") {
+			return nil, fmt.Errorf("cluster rebalance: invalid result arguments")
+		}
+	case "LATENCY":
+		if len(args) != 4 {
+			return nil, fmt.Errorf("cluster latency: invalid arguments")
+		}
+	default:
+		return nil, fmt.Errorf("cluster rebalance: unsupported action")
+	}
 	accepted := false
 	var probe *RebalanceTarget
-	errTransaction := h.repo.db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+	trace := gateTransactionTrace{Interface: h.repo.db.Logger, operation: "rebalance_" + strings.ToLower(action), startedAt: time.Now()}
+	errTransaction := h.repo.db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
 		// Local dispatch contention must not hold the cluster-wide election gate.
 		if errLifetime := h.repo.LockActiveConcurrencyLifetimeTx(ctx, tx, lifetime); errLifetime != nil {
 			return errLifetime
 		}
-		if strings.EqualFold(args[2], "LATENCY") {
-			if len(args) != 4 {
-				return fmt.Errorf("cluster latency: invalid arguments")
-			}
+		if action == "LATENCY" {
 			// Serialize reports only for this CPA, including first observations and
 			// read-modify-write failure backoff. Telemetry never takes the election gate.
 			var client CPARebalanceClientRecord
@@ -496,12 +555,12 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			if errNow != nil {
 				return errNow
 			}
-			homes, errHomes := loadRebalanceHomes(tx, now, h.coordinator.heartbeatTimeout)
+			snapshot, errHomes := loadRebalanceHomes(tx, now, h.coordinator.heartbeatTimeout)
 			if errHomes != nil {
 				return errHomes
 			}
 			var errReport error
-			probe, errReport = acceptLatencyReport(tx, lifetime, args[3], now, homes, client)
+			probe, errReport = acceptLatencyReport(tx, lifetime, args[3], now, snapshot.homes, client)
 			if errReport != nil {
 				return errReport
 			}
@@ -513,11 +572,8 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 		if errGate != nil {
 			return errGate
 		}
-		switch strings.ToUpper(args[2]) {
+		switch action {
 		case "ENABLE":
-			if len(args) != 3 {
-				return fmt.Errorf("cluster rebalance: invalid enable arguments")
-			}
 			var member CPANodeMembershipRecord
 			if errFirst := tx.First(&member, "certificate_fingerprint = ?", lifetime.Fingerprint).Error; errFirst != nil {
 				return errFirst
@@ -532,17 +588,17 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			accepted = true
 			return nil
 		case "CLAIM":
-			if len(args) != 7 {
-				return fmt.Errorf("cluster rebalance: invalid claim arguments")
+			if gate.Term <= 0 || !now.Before(gate.LeaseUntil) {
+				return nil
 			}
-			term, errTerm := strconv.ParseInt(args[4], 10, 64)
-			if errTerm != nil {
-				return errTerm
+			snapshot, errHomes := loadRebalanceHomes(tx, now, h.coordinator.heartbeatTimeout)
+			if errHomes != nil {
+				return errHomes
 			}
-			valid, errLeader := rebalanceLeaderValid(tx, gate, now, h.coordinator.heartbeatTimeout)
-			if errLeader != nil || !valid {
-				return errLeader
+			if !snapshot.leaderValid(gate, now) {
+				return nil
 			}
+			homes := snapshot.homes
 			var plan CPARebalancePlanRecord
 			errFirst := tx.First(&plan, "id = ? AND fingerprint = ?", args[3], lifetime.Fingerprint).Error
 			if errors.Is(errFirst, gorm.ErrRecordNotFound) {
@@ -554,10 +610,7 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			if plan.State != rebalancePending || term != gate.Term || plan.Term != term || !now.Before(plan.ExpiresAt) || !lifetime.ConnectedAt.Equal(plan.SourceConnectedAt) || rebalanceHomeKey(lifetime.Home) != rebalanceHomeKey(rebalanceSource(plan)) || plan.TargetIP != args[5] || strconv.Itoa(plan.TargetPort) != args[6] {
 				return nil
 			}
-			homes, errHomes := loadRebalanceHomes(tx, now, h.coordinator.heartbeatTimeout)
-			if errHomes != nil {
-				return errHomes
-			}
+			trace.planCount = 1
 			if target, live := homes[rebalanceHomeKey(rebalanceTarget(plan))]; !live || !target.capable {
 				return nil
 			}
@@ -570,7 +623,7 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 				current[member.CertificateFingerprint] = member
 			}
 			if _, healthy := current[lifetime.Fingerprint]; !healthy {
-				return finishRebalancePlan(tx, &plan, rebalanceCanceled, now)
+				return finishRebalancePlan(tx, &plan, rebalanceCanceled, now, nil)
 			}
 			var others []CPARebalancePlanRecord
 			if errFind := tx.Where("id <> ? AND expires_at > ? AND (state = ? OR (state = ? AND term = ?))", plan.ID, now, rebalanceExecuting, rebalancePending, gate.Term).Find(&others).Error; errFind != nil {
@@ -585,10 +638,10 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 					return errSwap
 				}
 				if !validSwap {
-					return finishRebalancePlan(tx, &plan, rebalanceCanceled, now)
+					return finishRebalancePlan(tx, &plan, rebalanceCanceled, now, nil)
 				}
 			} else if loads[rebalanceHomeKey(rebalanceSource(plan))]-loads[rebalanceHomeKey(rebalanceTarget(plan))] < 2 {
-				return finishRebalancePlan(tx, &plan, rebalanceCanceled, now)
+				return finishRebalancePlan(tx, &plan, rebalanceCanceled, now, nil)
 			}
 			plan.State, plan.UpdatedAt, plan.ExpiresAt = rebalanceExecuting, now, now.Add(rebalancePlanTTL)
 			if errSave := tx.Save(&plan).Error; errSave != nil {
@@ -597,9 +650,6 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			accepted = true
 			return nil
 		case "RESULT":
-			if len(args) != 5 || (args[4] != "success" && args[4] != "failed") {
-				return fmt.Errorf("cluster rebalance: invalid result arguments")
-			}
 			var plan CPARebalancePlanRecord
 			errFirst := tx.First(&plan, "id = ? AND fingerprint = ?", args[3], lifetime.Fingerprint).Error
 			if errors.Is(errFirst, gorm.ErrRecordNotFound) {
@@ -620,7 +670,8 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 				}
 				state = rebalanceCompleted
 			}
-			if errFinish := finishRebalancePlan(tx, &plan, state, now); errFinish != nil {
+			trace.planCount = 1
+			if errFinish := finishRebalancePlan(tx, &plan, state, now, nil); errFinish != nil {
 				return errFinish
 			}
 			accepted = true
@@ -629,6 +680,7 @@ func (h *RESPHandler) HandleRebalance(ctx context.Context, lifetime ConnectionLi
 			return fmt.Errorf("cluster rebalance: unsupported action")
 		}
 	})
+	trace.logResult(errTransaction)
 	if errTransaction != nil {
 		return nil, errTransaction
 	}

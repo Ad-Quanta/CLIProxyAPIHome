@@ -110,8 +110,15 @@ func (c *Coordinator) Initialize(ctx context.Context) error {
 	if initialized {
 		return nil
 	}
+	db, errDB := c.repo.database()
+	if errDB != nil {
+		return errDB
+	}
 	if _, errEnsure := c.repo.EnsureLifecycleConfig(ctx, c.heartbeatTimeout); errEnsure != nil {
 		return errEnsure
+	}
+	if errCreate := db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&ClusterMasterGateRecord{ID: 1}).Error; errCreate != nil {
+		return errCreate
 	}
 	incarnation, errRegister := c.repo.RegisterHomeIncarnation(ctx, c.node.IP, c.node.Port, []string{"credential_concurrency_foundation_v1", "credential_concurrency_limits_v2", rebalanceCapability, rebalanceLatencyCapability})
 	if errRegister != nil {
@@ -221,6 +228,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "kv store", c.repo.KVPurgeExpired)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "cpa latency summaries", c.repo.PurgeExpiredCPALatencySummaries)
 	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "cpa latency confirmations", c.repo.PurgeExpiredCPALatencyConfirmations)
+	go c.runExpiredRecordsCleanupLoop(cleanupCtx, "cpa rebalance plans", c.repo.PurgeExpiredCPARebalancePlans)
 
 	snapshotCtx, cancelSnapshot := context.WithCancel(ctx)
 	snapshotTicker := time.NewTicker(min(time.Second, c.heartbeatInterval))
@@ -401,18 +409,11 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 	}
 
 	var elected ClusterNodeRecord
-	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		gate := ClusterMasterGateRecord{ID: 1}
-		if errCreate := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&gate).Error; errCreate != nil {
-			return errCreate
-		}
-		if errLock := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&gate, "id = ?", 1).Error; errLock != nil {
-			return errLock
-		}
-
-		now, errNow := DatabaseNow(ctx, tx)
-		if errNow != nil {
-			return errNow
+	trace := gateTransactionTrace{Interface: db.Logger, operation: "election", startedAt: time.Now()}
+	errTransaction := db.Session(&gorm.Session{Logger: &trace}).WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		gate, now, errGate := lockRebalanceGate(tx)
+		if errGate != nil {
+			return errGate
 		}
 		record := ClusterNodeRecord{
 			IP:          c.node.IP,
@@ -444,22 +445,27 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context, home HomeIncarnatio
 		sortClusterNodes(liveNodes)
 		elected = liveNodes[0]
 		masterKey := rebalanceHomeKey(HomeIncarnationID{IP: elected.IP, Port: elected.Port, StartedAt: elected.StartedAt})
+		updates := make(map[string]any)
 		if gate.MasterKey != masterKey || !now.Before(gate.LeaseUntil) {
-			gate.Term++
-			gate.LastBalanceAt = time.Time{}
+			updates["term"] = gate.Term + 1
+			updates["master_key"] = masterKey
+			updates["last_balance_at"] = time.Time{}
 		}
-		gate.MasterKey = masterKey
-		gate.LeaseUntil = elected.LastSeenAt.Add(c.heartbeatTimeout)
-		if errGate := tx.Save(&gate).Error; errGate != nil {
-			return errGate
+		leaseUntil := elected.LastSeenAt.Add(c.heartbeatTimeout)
+		if !gate.LeaseUntil.Equal(leaseUntil) {
+			updates["lease_until"] = leaseUntil
 		}
-		if errClear := tx.Model(&ClusterNodeRecord{}).Where("is_master = ?", true).Update("is_master", false).Error; errClear != nil {
-			return errClear
+		if len(updates) > 0 {
+			if errUpdate := tx.Model(&gate).Updates(updates).Error; errUpdate != nil {
+				return errUpdate
+			}
 		}
+		// Preserve the incumbent flag without a clear/set write on every heartbeat.
 		return tx.Model(&ClusterNodeRecord{}).
-			Where("ip = ? AND port = ? AND started_at = ?", elected.IP, elected.Port, elected.StartedAt).
-			Update("is_master", true).Error
+			Where("COALESCE(is_master, FALSE) <> (ip = ? AND port = ? AND started_at = ?)", elected.IP, elected.Port, elected.StartedAt).
+			Update("is_master", gorm.Expr("ip = ? AND port = ? AND started_at = ?", elected.IP, elected.Port, elected.StartedAt)).Error
 	})
+	trace.logResult(errTransaction)
 	if errTransaction != nil {
 		return errTransaction
 	}

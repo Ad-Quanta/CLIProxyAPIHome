@@ -116,7 +116,7 @@ func TestRebalanceGlobalBackoffCapsAndCancellationCannotShortenIt(t *testing.T) 
 	}
 	for _, wantBackoff := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 10 * time.Minute, 10 * time.Minute} {
 		plan.State = rebalanceExecuting
-		errTransaction := f.repo.db.Transaction(func(tx *gorm.DB) error { return finishRebalancePlan(tx, &plan, rebalanceFailed, now) })
+		errTransaction := f.repo.db.Transaction(func(tx *gorm.DB) error { return finishRebalancePlan(tx, &plan, rebalanceFailed, now, nil) })
 		if errTransaction != nil {
 			t.Fatal(errTransaction)
 		}
@@ -129,7 +129,7 @@ func TestRebalanceGlobalBackoffCapsAndCancellationCannotShortenIt(t *testing.T) 
 		}
 		plan.State = rebalancePending
 		if errTransaction := f.repo.db.Transaction(func(tx *gorm.DB) error {
-			return finishRebalancePlan(tx, &plan, rebalanceCanceled, now.Add(time.Second))
+			return finishRebalancePlan(tx, &plan, rebalanceCanceled, now.Add(time.Second), nil)
 		}); errTransaction != nil {
 			t.Fatal(errTransaction)
 		}
@@ -143,7 +143,7 @@ func TestRebalanceGlobalBackoffCapsAndCancellationCannotShortenIt(t *testing.T) 
 		now = now.Add(wantBackoff)
 	}
 	plan.State = rebalanceExecuting
-	if errTransaction := f.repo.db.Transaction(func(tx *gorm.DB) error { return finishRebalancePlan(tx, &plan, rebalanceCompleted, now) }); errTransaction != nil {
+	if errTransaction := f.repo.db.Transaction(func(tx *gorm.DB) error { return finishRebalancePlan(tx, &plan, rebalanceCompleted, now, nil) }); errTransaction != nil {
 		t.Fatal(errTransaction)
 	}
 	var recovered CPARebalanceClientRecord
