@@ -65,6 +65,10 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		}))
 	}
 	sqlDB := stdlib.OpenDB(*pgConfig, options...)
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	if cfg.MaxIdleConns != nil {
+		sqlDB.SetMaxIdleConns(*cfg.MaxIdleConns)
+	}
 	db, errOpen := gorm.Open(postgres.New(postgres.Config{DSN: dsn, Conn: sqlDB}), databaseGORMConfig(cfg.SlowQueryThreshold))
 	if errOpen != nil {
 		if errClose := sqlDB.Close(); errClose != nil {
