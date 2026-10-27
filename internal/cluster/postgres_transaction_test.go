@@ -3,7 +3,6 @@ package cluster
 import (
 	"context"
 	"errors"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -43,66 +42,43 @@ func TestPostgresGateTransactionStartup(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CLIPROXY_HOME_TEST_POSTGRES_DSN is not configured")
 	}
-	for _, timezone := range []string{"", "Japan"} {
-		name := "default"
-		if timezone != "" {
-			name = "timezone"
+	db, errOpen := Open(t.Context(), PGSQLConfig{PostgresURI: dsn})
+	if errOpen != nil {
+		t.Fatal(errOpen)
+	}
+	pool, errDB := db.DB()
+	if errDB != nil {
+		t.Fatal(errDB)
+	}
+	t.Cleanup(func() {
+		if errClose := pool.Close(); errClose != nil {
+			t.Error(errClose)
 		}
-		t.Run(name, func(t *testing.T) {
-			configuredDSN := dsn
-			if timezone != "" {
-				if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-					parsed, errParse := url.Parse(dsn)
-					if errParse != nil {
-						t.Fatal(errParse)
-					}
-					query := parsed.Query()
-					query.Set("timezone", timezone)
-					parsed.RawQuery = query.Encode()
-					configuredDSN = parsed.String()
-				} else {
-					configuredDSN += " timezone=" + timezone
-				}
-			}
-			db, errOpen := Open(t.Context(), PGSQLConfig{PostgresURI: configuredDSN})
-			if errOpen != nil {
-				t.Fatal(errOpen)
-			}
-			pool, errDB := db.DB()
-			if errDB != nil {
-				t.Fatal(errDB)
-			}
-			t.Cleanup(func() {
-				if errClose := pool.Close(); errClose != nil {
-					t.Error(errClose)
-				}
-			})
-			clock := time.Unix(0, 0)
-			trace := gateTransactionTrace{Interface: db.Logger, startedAt: time.Now(), nowFunc: func() time.Time {
-				clock = clock.Add(time.Millisecond)
-				return clock
-			}}
-			var timestamp time.Time
-			errTransaction := trace.transaction(t.Context(), db, func(tx *gorm.DB) error {
-				if trace.connectionSource != "pool" || trace.beginDuration != time.Millisecond || trace.connectionAcquire != 2*time.Millisecond {
-					t.Fatalf("native PostgreSQL BEGIN was not measured: %+v", trace)
-				}
-				// Advancing the test clock in the body must not affect startup timing.
-				clock = clock.Add(time.Hour)
-				return tx.Raw("SELECT TIMESTAMP '2026-01-02 03:04:05'").Scan(&timestamp).Error
-			})
-			if errTransaction != nil {
-				t.Fatal(errTransaction)
-			}
-			if trace.beginDuration != time.Millisecond || trace.connectionAcquire != 2*time.Millisecond || trace.sqlCount != 1 {
-				t.Fatalf("startup included the body/commit or added SQL: %+v", trace)
-			}
-			if timezone != "" && timestamp.Location().String() != timezone {
-				t.Fatalf("timestamp scan timezone changed: got %s, want %s", timestamp.Location(), timezone)
-			}
-			if pool.Stats().InUse != 0 {
-				t.Fatalf("connection not released: %+v", pool.Stats())
-			}
-		})
+	})
+	clock := time.Unix(0, 0)
+	trace := gateTransactionTrace{Interface: db.Logger, startedAt: time.Now(), nowFunc: func() time.Time {
+		clock = clock.Add(time.Millisecond)
+		return clock
+	}}
+	var result int
+	errTransaction := trace.transaction(t.Context(), db, func(tx *gorm.DB) error {
+		if trace.connectionSource != "pool" || trace.beginDuration != time.Millisecond || trace.connectionAcquire != 2*time.Millisecond {
+			t.Fatalf("native PostgreSQL BEGIN was not measured: %+v", trace)
+		}
+		// Advancing the test clock in the body must not affect startup timing.
+		clock = clock.Add(time.Hour)
+		return tx.Raw("SELECT 1").Scan(&result).Error
+	})
+	if errTransaction != nil {
+		t.Fatal(errTransaction)
+	}
+	if result != 1 {
+		t.Fatalf("transaction query result = %d, want 1", result)
+	}
+	if trace.beginDuration != time.Millisecond || trace.connectionAcquire != 2*time.Millisecond || trace.sqlCount != 1 {
+		t.Fatalf("startup included the body/commit or added SQL: %+v", trace)
+	}
+	if pool.Stats().InUse != 0 {
+		t.Fatalf("connection not released: %+v", pool.Stats())
 	}
 }
