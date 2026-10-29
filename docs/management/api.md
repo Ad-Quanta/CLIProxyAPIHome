@@ -2511,7 +2511,7 @@ Input:
 | Form field or query | Type | Required | Description |
 | --- | --- | --- | --- |
 | form `file` | file | yes | Vertex service account JSON. |
-| form/query `location` | string | no | Vertex location. Default: `us-central1`. |
+| form/query `location` | string | no | Vertex location. Default: `global`. |
 
 Example response:
 
@@ -2521,7 +2521,7 @@ Example response:
   "auth-file": "11111111-2222-4333-8444-555555555555.json",
   "project_id": "project-id",
   "email": "service-account@example.iam.gserviceaccount.com",
-  "location": "us-central1"
+  "location": "global"
 }
 ```
 
