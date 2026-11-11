@@ -492,7 +492,7 @@ func NormalizeConfigLayout(data []byte, migrate bool) ([]byte, bool, error) {
 }
 
 func v8AllowedRoots() map[string]bool {
-	allowed := map[string]bool{"models": true, "config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "credential-concurrency-policies": true}
+	allowed := map[string]bool{"models": true, "config-version": true, "api-keys": true, "plugins": true, "quota-exceeded": true, "user-email": true, "credential-concurrency-policies": true, "model-fallback": true}
 	for _, path := range v8Paths {
 		section, _, _ := strings.Cut(path.current, ".")
 		allowed[section] = true

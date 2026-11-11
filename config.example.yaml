@@ -216,6 +216,21 @@ routing:
     # Home keeps its existing scheduler cooldown policy.
     # transient-error-cooldown-seconds: 0
 
+# Cross-model fallback. Home stores and forwards this CPA execution option.
+# A fallback runs only after the requested model fails and before any response
+# byte is written downstream. Disabled by default.
+# model-fallback:
+#   enabled: false
+#   # Rewrite the response model back to the requested model. Default: true.
+#   preserve-requested-model: true
+#   # Upstream statuses that may switch models. Default: [429, 500, 502, 503, 504].
+#   trigger-status-codes: [429, 500, 502, 503, 504]
+#   # Statuses that never switch models. Default: [400, 401, 403, 422].
+#   no-fallback-status-codes: [400, 401, 403, 422]
+#   rules:
+#     - from: "primary-model"
+#       to: ["fallback-model", "last-resort-model"]
+
 # Shared request/response behavior.
 requests:
   # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/

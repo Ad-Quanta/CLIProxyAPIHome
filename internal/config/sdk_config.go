@@ -47,6 +47,11 @@ type SDKConfig struct {
 	// Streaming configures server-side streaming behavior (keep-alives and safe bootstrap retries).
 	Streaming StreamingConfig `yaml:"streaming" json:"streaming"`
 
+	// ModelFallback configures cross-model retries that run only after the
+	// requested model fails and before any response byte is written downstream.
+	// Home stores and forwards this CPA option; the CPA node applies it.
+	ModelFallback ModelFallback `yaml:"model-fallback,omitempty" json:"model-fallback,omitempty"`
+
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
